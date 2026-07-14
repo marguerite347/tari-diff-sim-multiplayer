@@ -165,6 +165,18 @@
                     </div>
                 </div>
 
+                <!-- Agent copilot -->
+                <div class="mp-panel">
+                    <h3 class="mp-panel-title">Copilot</h3>
+                    <div class="mp-copilot-head">
+                        <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot: OFF</button>
+                        <span class="mp-copilot-hint">Let the agent run your rigs — it explains every move.</span>
+                    </div>
+                    <div id="mpCopilotLog" class="mp-copilot-log">
+                        <div class="dim mp-copilot-empty">Autopilot is off. Flip it on and I&rsquo;ll play this round for you, narrating my decisions and why.</div>
+                    </div>
+                </div>
+
                 <!-- High scores -->
                 <div class="mp-panel">
                     <h3 class="mp-panel-title">High scores</h3>
@@ -324,6 +336,7 @@
     <script src="js/app.js"></script>
     <script src="lib/three.min.js"></script>
     <script src="js/battlefield.js"></script>
+    <script src="js/agent.js"></script>
     <script src="js/multiplayer.js"></script>
 </body>
 </html>

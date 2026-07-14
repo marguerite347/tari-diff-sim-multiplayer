@@ -65,6 +65,7 @@ const Multiplayer = (function () {
         hideVictory();
         showChallengeCard(msg.challenge);
         renderStatusLamp();
+        if (window.Copilot) Copilot.onBrief(msg.challenge, roomState);
         break;
       case 'block_mined':
         if (!roomState) return;
@@ -82,6 +83,7 @@ const Multiplayer = (function () {
         renderRaceTrack();
         updateLiveStats();
         celebrateBlock(msg.block);
+        if (window.Copilot) Copilot.onBlock(roomState, msg.block);
         break;
       case 'round_result':
         if (roomState) {
@@ -94,6 +96,7 @@ const Multiplayer = (function () {
         showResult(msg.result);
         loadResearch();
         render();
+        if (window.Copilot) Copilot.onResult(msg.result);
         break;
       case 'status':
         statusMessage = msg.message || '';
@@ -172,8 +175,38 @@ const Multiplayer = (function () {
     for (let i = 0; i < 4; i++) {
       const slider = document.getElementById(`mpHr${i}`);
       slider?.addEventListener('input', () => updateSliderVisual(i));
-      slider?.addEventListener('change', sendHashrates);
+      slider?.addEventListener('change', () => {
+        if (window.Copilot?.isEnabled()) {
+          copilotLog('You moved a slider manually — autopilot will override it on its next move. Toggle it off to take back control.', 'sys');
+        }
+        sendHashrates();
+      });
       updateSliderVisual(i);
+    }
+
+    if (window.Copilot) {
+      Copilot.init({
+        applyHashrates(alloc) {
+          const hashrates = {};
+          for (let i = 0; i < 4; i++) {
+            const value = Math.max(0, Number(alloc[i] || 0));
+            hashrates[i] = value;
+            const el = document.getElementById(`mpHr${i}`);
+            if (el) { el.value = String(Math.min(SLIDER_MAX, value)); updateSliderVisual(i); }
+          }
+          send({ type: 'set_hashrates', hashrates });
+        },
+        log: copilotLog,
+      });
+      document.getElementById('mpCopilotToggle')?.addEventListener('click', () => {
+        const next = !Copilot.isEnabled();
+        Copilot.setEnabled(next, roomState);
+        const btn = document.getElementById('mpCopilotToggle');
+        if (btn) {
+          btn.textContent = `Autopilot: ${next ? 'ON' : 'OFF'}`;
+          btn.classList.toggle('primary', next);
+        }
+      });
     }
 
     document.getElementById('mpSpeedup')?.addEventListener('change', () => {
@@ -188,6 +221,17 @@ const Multiplayer = (function () {
     connect();
     render();
     loadResearch();
+  }
+
+  function copilotLog(text, kind = 'move') {
+    const log = document.getElementById('mpCopilotLog');
+    if (!log) return;
+    log.querySelector('.mp-copilot-empty')?.remove();
+    const div = document.createElement('div');
+    div.className = `mp-copilot-entry ${kind}`;
+    div.textContent = text;
+    log.insertAdjacentElement('afterbegin', div);
+    while (log.children.length > 40) log.removeChild(log.lastChild);
   }
 
   function updateSliderVisual(i) {
