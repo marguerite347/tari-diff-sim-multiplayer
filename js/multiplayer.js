@@ -6,7 +6,6 @@
  */
 const Multiplayer = (function () {
   const ALGO_NAMES = ['RandomXM', 'Sha3x', 'RandomXT', 'Cuckaroo'];
-  const LANE_BLOCK_LIMIT = 6;
   const SLIDER_MAX = 300;
 
   let ws = null;
@@ -14,7 +13,6 @@ const Multiplayer = (function () {
   let roomState = null;
   let statusMessage = '';
   let toastTimer = null;
-  const penaltyTimers = [null, null, null, null];
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -55,6 +53,7 @@ const Multiplayer = (function () {
         roomState = msg;
         render();
         if (msg.roundOver) showVictory(msg);
+        else hideVictory();
         break;
       case 'block_mined':
         if (!roomState) return;
@@ -64,11 +63,10 @@ const Multiplayer = (function () {
         if (msg.leaderboard) roomState.players = msg.leaderboard;
         if (msg.goalBlocks) roomState.goalBlocks = msg.goalBlocks;
         document.getElementById('mpHeight').textContent = String(msg.block.height);
-        dropLaneBlock(msg.block);
+        updateBattlefield(msg.block);
         prependBlock(msg.block);
         renderLeaderboard();
         renderRaceTrack();
-        renderLanePower();
         updateLiveStats();
         celebrateBlock(msg.block);
         break;
@@ -134,7 +132,7 @@ const Multiplayer = (function () {
     document.getElementById('mpStop')?.addEventListener('click', () => send({ type: 'stop' }));
     document.getElementById('mpReset')?.addEventListener('click', () => {
       hideVictory();
-      clearLanes();
+      if (window.Battlefield) Battlefield.reset();
       send({ type: 'reset' });
     });
     document.getElementById('mpLeave')?.addEventListener('click', () => {
@@ -155,16 +153,21 @@ const Multiplayer = (function () {
       }
     });
 
+    const sendHashrates = () => {
+      const hashrates = {};
+      for (let i = 0; i < 4; i++) hashrates[i] = Number(document.getElementById(`mpHr${i}`)?.value || 0);
+      send({ type: 'set_hashrates', hashrates });
+    };
+
     for (let i = 0; i < 4; i++) {
       const slider = document.getElementById(`mpHr${i}`);
       slider?.addEventListener('input', () => updateSliderVisual(i));
+      slider?.addEventListener('change', sendHashrates);
       updateSliderVisual(i);
     }
 
     document.getElementById('mpApplyHashrate')?.addEventListener('click', () => {
-      const hashrates = {};
-      for (let i = 0; i < 4; i++) hashrates[i] = Number(document.getElementById(`mpHr${i}`)?.value || 0);
-      send({ type: 'set_hashrates', hashrates });
+      sendHashrates();
       send({
         type: 'set_settings',
         settings: {
@@ -236,58 +239,30 @@ const Multiplayer = (function () {
       document.body.classList.add('mp-flash');
       setTimeout(() => document.body.classList.remove('mp-flash'), 280);
     }
-    if (block.penaltyMultiplier > 1) flashLanePenalty(block.algo);
-  }
-
-  function flashLanePenalty(algo) {
-    const el = document.getElementById(`mpLanePenalty${algo}`);
-    if (!el) return;
-    el.hidden = false;
-    clearTimeout(penaltyTimers[algo]);
-    penaltyTimers[algo] = setTimeout(() => { el.hidden = true; }, 2200);
-  }
-
-  function dropLaneBlock(block) {
-    const lane = document.getElementById(`mpLaneBlocks${block.algo}`);
-    if (!lane) return;
-    const mine = block.minerId && block.minerId === roomState?.you;
-    const div = document.createElement('div');
-    div.className = `mp-lane-block${mine ? ' mine' : ''}`;
-    div.innerHTML = `<span>#${block.height}</span><span>${escapeHtml(shortName(block.minerName))}</span>`;
-    lane.appendChild(div);
-    requestAnimationFrame(() => div.classList.add('in'));
-    while (lane.children.length > LANE_BLOCK_LIMIT) lane.removeChild(lane.firstChild);
-  }
-
-  function clearLanes() {
-    for (let i = 0; i < 4; i++) {
-      const lane = document.getElementById(`mpLaneBlocks${i}`);
-      if (lane) lane.innerHTML = '';
+    if (block.penaltyMultiplier > 1) {
+      showToast(`TIP-004 PENALTY ON ${ALGO_NAMES[block.algo].toUpperCase()}`, 'bad');
     }
   }
 
-  function rebuildLanes() {
-    clearLanes();
-    const blocks = (roomState?.recentBlocks || []).slice(-24);
-    for (const block of blocks) {
-      const lane = document.getElementById(`mpLaneBlocks${block.algo}`);
-      if (!lane) continue;
-      const mine = block.minerId && block.minerId === roomState?.you;
-      const div = document.createElement('div');
-      div.className = `mp-lane-block in${mine ? ' mine' : ''}`;
-      div.innerHTML = `<span>#${block.height}</span><span>${escapeHtml(shortName(block.minerName))}</span>`;
-      lane.appendChild(div);
-      while (lane.children.length > LANE_BLOCK_LIMIT) lane.removeChild(lane.firstChild);
-    }
+  function ensureBattlefield() {
+    const container = document.getElementById('mpBattlefield');
+    if (!container || !window.Battlefield) return;
+    Battlefield.init(container);
+    Battlefield.onResize();
   }
 
-  function renderLanePower() {
-    if (!roomState) return;
-    const totals = roomState.totals || {};
-    const max = Math.max(1, ...[0, 1, 2, 3].map((i) => Number(totals[i] || 0)));
-    for (let i = 0; i < 4; i++) {
-      const bar = document.getElementById(`mpLanePower${i}`);
-      if (bar) bar.style.width = `${Math.round((Number(totals[i] || 0) / max) * 100)}%`;
+  function updateBattlefield(block) {
+    if (!window.Battlefield) return;
+    if (roomState?.totals) Battlefield.setPowers(roomState.totals);
+    if (block) Battlefield.blockMined(block);
+    const heightEl = document.getElementById('mpBfHeight');
+    if (heightEl) heightEl.textContent = `BLOCK ${roomState?.height || 0}`;
+    const statusEl = document.getElementById('mpBfStatus');
+    if (statusEl && roomState) {
+      const top = (roomState.players || [])[0];
+      if (roomState.roundOver) statusEl.textContent = 'ROUND OVER';
+      else if (!roomState.running) statusEl.textContent = 'ARMIES ARE ASSEMBLING';
+      else if (top) statusEl.textContent = `${top.name.toUpperCase()} IS WINNING — ${top.blocksMined}/${roomState.goalBlocks}`;
     }
   }
 
@@ -343,8 +318,8 @@ const Multiplayer = (function () {
 
     renderLeaderboard();
     renderRaceTrack();
-    renderLanePower();
-    rebuildLanes();
+    ensureBattlefield();
+    updateBattlefield(null);
 
     const feed = document.getElementById('mpBlockFeed');
     feed.innerHTML = (roomState.recentBlocks || []).slice().reverse().map(blockCard).join('') ||

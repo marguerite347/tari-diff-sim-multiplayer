@@ -82,7 +82,11 @@ class Room {
   removeClient(playerId) {
     this.clients.delete(playerId);
     const player = this.players.get(playerId);
-    if (player) player.connected = false;
+    if (player) {
+      player.connected = false;
+      // No score yet — nothing to preserve for a reconnect, drop the ghost entry.
+      if (!player.score && !player.blocksMined) this.players.delete(playerId);
+    }
 
     if (this.hostId === playerId) {
       const nextHost = [...this.players.values()].find((p) => p.connected);
@@ -231,6 +235,11 @@ class Room {
 
   reset(playerId) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can reset' };
+    this.roundOver = false;
+    this.winnerId = null;
+    for (const [id, p] of this.players) {
+      if (!p.connected) this.players.delete(id);
+    }
     this.stop();
     this._resetScoresAndChain(true);
     this.broadcast({ type: 'status', message: 'New round ready', running: false });

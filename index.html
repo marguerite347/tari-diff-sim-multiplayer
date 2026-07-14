@@ -104,32 +104,19 @@
             </div>
             <p class="mp-share-line">Invite link: <code id="mpShareLink"></code> <span class="mp-conn-line">· <span id="mpConnStatus2"></span></span></p>
 
-            <!-- Mining arena: 4 lanes -->
-            <div class="mp-arena" id="mpArena">
-                <div class="mp-arena-lane" data-algo="0" style="--lane:#ff4d5e">
-                    <div class="mp-lane-head">RandomXM</div>
-                    <div class="mp-lane-blocks" id="mpLaneBlocks0"></div>
-                    <div class="mp-lane-penalty" id="mpLanePenalty0" hidden>PENALTY</div>
-                    <div class="mp-lane-power"><div id="mpLanePower0"></div></div>
+            <!-- 3D battlefield arena -->
+            <div class="mp-battlefield" id="mpBattlefield">
+                <div class="mp-bf-overlay">
+                    <div class="mp-bf-height" id="mpBfHeight">BLOCK 0</div>
+                    <div class="mp-bf-status" id="mpBfStatus">ARMIES ARE ASSEMBLING</div>
                 </div>
-                <div class="mp-arena-lane" data-algo="1" style="--lane:#37b6ff">
-                    <div class="mp-lane-head">Sha3x</div>
-                    <div class="mp-lane-blocks" id="mpLaneBlocks1"></div>
-                    <div class="mp-lane-penalty" id="mpLanePenalty1" hidden>PENALTY</div>
-                    <div class="mp-lane-power"><div id="mpLanePower1"></div></div>
+                <div class="mp-bf-legend">
+                    <span style="--lane:#ff4d5e">RandomXM</span>
+                    <span style="--lane:#37b6ff">Sha3x</span>
+                    <span style="--lane:#3dffa2">RandomXT</span>
+                    <span style="--lane:#ffb640">Cuckaroo</span>
                 </div>
-                <div class="mp-arena-lane" data-algo="2" style="--lane:#3dffa2">
-                    <div class="mp-lane-head">RandomXT</div>
-                    <div class="mp-lane-blocks" id="mpLaneBlocks2"></div>
-                    <div class="mp-lane-penalty" id="mpLanePenalty2" hidden>PENALTY</div>
-                    <div class="mp-lane-power"><div id="mpLanePower2"></div></div>
-                </div>
-                <div class="mp-arena-lane" data-algo="3" style="--lane:#ffb640">
-                    <div class="mp-lane-head">Cuckaroo</div>
-                    <div class="mp-lane-blocks" id="mpLaneBlocks3"></div>
-                    <div class="mp-lane-penalty" id="mpLanePenalty3" hidden>PENALTY</div>
-                    <div class="mp-lane-power"><div id="mpLanePower3"></div></div>
-                </div>
+                <div class="mp-bf-hint">drag to orbit · scroll to zoom · double-click to auto-spin</div>
             </div>
 
             <div class="mp-deck">
@@ -300,6 +287,8 @@
     <script src="js/charts.js"></script>
     <script src="js/data.js"></script>
     <script src="js/app.js"></script>
+    <script src="lib/three.min.js"></script>
+    <script src="js/battlefield.js"></script>
     <script src="js/multiplayer.js"></script>
 </body>
 </html>
