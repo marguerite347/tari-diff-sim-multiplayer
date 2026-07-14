@@ -53,8 +53,18 @@ const Multiplayer = (function () {
         roomState = msg;
         if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
         render();
-        if (msg.roundOver) showVictory(msg);
+        if (msg.roundOver && msg.lastResult) showResult(msg.lastResult);
         else hideVictory();
+        break;
+      case 'challenge_brief':
+        if (roomState) {
+          roomState.challenge = msg.challenge;
+          roomState.running = true;
+          roomState.roundOver = false;
+        }
+        hideVictory();
+        showChallengeCard(msg.challenge);
+        renderStatusLamp();
         break;
       case 'block_mined':
         if (!roomState) return;
@@ -63,6 +73,7 @@ const Multiplayer = (function () {
         roomState.totals = msg.totals;
         if (msg.leaderboard) roomState.players = msg.leaderboard;
         if (msg.goalBlocks) roomState.goalBlocks = msg.goalBlocks;
+        if (msg.objective) roomState.objective = msg.objective;
         document.getElementById('mpHeight').textContent = String(msg.block.height);
         updateBattlefield(msg.block);
         recordTelemetry(msg.block);
@@ -72,19 +83,16 @@ const Multiplayer = (function () {
         updateLiveStats();
         celebrateBlock(msg.block);
         break;
-      case 'round_over':
+      case 'round_result':
         if (roomState) {
           roomState.roundOver = true;
-          roomState.winnerId = msg.winnerId;
           roomState.running = false;
+          roomState.lastResult = msg.result;
           if (msg.leaderboard) roomState.players = msg.leaderboard;
         }
-        showVictory({
-          winnerId: msg.winnerId,
-          players: msg.leaderboard,
-          you: roomState?.you,
-          goalBlocks: msg.goalBlocks,
-        }, msg.winnerName);
+        hideChallengeCard();
+        showResult(msg.result);
+        loadResearch();
         render();
         break;
       case 'status':
@@ -168,22 +176,18 @@ const Multiplayer = (function () {
       updateSliderVisual(i);
     }
 
-    document.getElementById('mpApplyHashrate')?.addEventListener('click', () => {
-      sendHashrates();
+    document.getElementById('mpSpeedup')?.addEventListener('change', () => {
       send({
         type: 'set_settings',
-        settings: {
-          penalty: document.getElementById('mpPenalty')?.checked ?? true,
-          speedup: Number(document.getElementById('mpSpeedup')?.value || 60),
-          windowSize: Number(document.getElementById('mpWindow')?.value || 45),
-          goalBlocks: Number(document.getElementById('mpGoal')?.value || 20),
-        },
+        settings: { speedup: Number(document.getElementById('mpSpeedup')?.value || 120) },
       });
-      showToast('LOADOUT LOCKED', 'good');
     });
+
+    document.getElementById('mpChallengeGo')?.addEventListener('click', hideChallengeCard);
 
     connect();
     render();
+    loadResearch();
   }
 
   function updateSliderVisual(i) {
@@ -262,10 +266,16 @@ const Multiplayer = (function () {
     if (heightEl) heightEl.textContent = `BLOCK ${roomState?.height || 0}`;
     const statusEl = document.getElementById('mpBfStatus');
     if (statusEl && roomState) {
-      const top = (roomState.players || [])[0];
-      if (roomState.roundOver) statusEl.textContent = 'ROUND OVER';
-      else if (!roomState.running) statusEl.textContent = 'ARMIES ARE ASSEMBLING';
-      else if (top) statusEl.textContent = `${top.name.toUpperCase()} IS WINNING — ${top.blocksMined}/${roomState.goalBlocks}`;
+      if (roomState.roundOver) {
+        statusEl.textContent = roomState.lastResult?.success ? 'NETWORK DEFENDED' : 'ROUND OVER';
+      } else if (!roomState.running) {
+        statusEl.textContent = 'ARMIES ARE ASSEMBLING';
+      } else if (roomState.objective) {
+        statusEl.textContent = roomState.objective.label;
+        statusEl.classList.toggle('bad', !roomState.objective.ok);
+      } else if (roomState.challenge) {
+        statusEl.textContent = roomState.challenge.name;
+      }
     }
   }
 
@@ -398,19 +408,81 @@ const Multiplayer = (function () {
     });
   }
 
-  function showVictory(state, winnerName) {
+  function showChallengeCard(challenge) {
+    const overlay = document.getElementById('mpChallengeCard');
+    if (!overlay || !challenge) return;
+    document.getElementById('mpChallengeName').textContent = challenge.name;
+    document.getElementById('mpChallengeBrief').textContent = challenge.brief;
+    document.getElementById('mpChallengeVariant').textContent = challenge.variantLabel;
+    document.getElementById('mpChallengeObjective').textContent = `OBJECTIVE: ${challenge.objectiveLabel}`;
+    overlay.hidden = false;
+    clearTimeout(showChallengeCard._timer);
+    showChallengeCard._timer = setTimeout(hideChallengeCard, 8000);
+  }
+
+  function hideChallengeCard() {
+    const overlay = document.getElementById('mpChallengeCard');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function showResult(result) {
     const overlay = document.getElementById('mpVictory');
-    if (!overlay) return;
-    const youWin = state.winnerId && state.winnerId === (state.you || roomState?.you);
-    const name = winnerName || state.players?.find((p) => p.id === state.winnerId)?.name || 'Someone';
-    document.getElementById('mpVictoryTitle').textContent = youWin ? 'YOU WIN!' : `${name.toUpperCase()} WINS`;
-    document.getElementById('mpVictorySub').textContent = `First to ${state.goalBlocks || roomState?.goalBlocks || 20} blocks. Hit New round to rematch.`;
+    if (!overlay || !result) return;
+    const success = !!result.success;
+    document.getElementById('mpVictoryKicker').textContent = result.challenge?.name || 'Round complete';
+    document.getElementById('mpVictoryTitle').textContent = success ? 'NETWORK DEFENDED' : 'NETWORK DEGRADED';
+    document.getElementById('mpVictoryTitle').classList.toggle('fail', !success);
+    document.getElementById('mpVictorySub').textContent = result.challenge?.variantLabel || '';
+    document.getElementById('mpVictoryStats').innerHTML = `
+      <div><span>STABILITY</span><strong>${Math.round((result.stability || 0) * 100)}%</strong></div>
+      <div><span>MEAN BT</span><strong>${result.meanBt || 0}s</strong></div>
+      <div><span>TOP ALGO</span><strong>${Math.round((result.maxShare || 0) * 100)}%</strong></div>
+      <div><span>PENALTIES</span><strong>${result.penaltyEvents || 0}</strong></div>
+      ${result.mvpName ? `<div><span>MVP</span><strong>${escapeHtml(result.mvpName)}</strong></div>` : ''}
+      <div class="mp-result-note">Datapoint recorded — thanks for testing the Tari network.</div>`;
+    overlay.querySelector('.mp-confetti').style.display = success ? '' : 'none';
     overlay.hidden = false;
   }
 
   function hideVictory() {
     const overlay = document.getElementById('mpVictory');
     if (overlay) overlay.hidden = true;
+  }
+
+  async function loadResearch() {
+    const el = document.getElementById('mpResearch');
+    if (!el) return;
+    try {
+      const res = await fetch('/api/research');
+      const data = await res.json();
+      renderResearch(data.results || []);
+    } catch {
+      /* endpoint unavailable in static mode — leave placeholder */
+    }
+  }
+
+  function renderResearch(results) {
+    const el = document.getElementById('mpResearch');
+    if (!el) return;
+    if (!results.length) {
+      el.innerHTML = '<div class="dim">No rounds recorded yet — finish a challenge to add the first datapoint.</div>';
+      return;
+    }
+    const byChallenge = new Map();
+    for (const row of results) {
+      if (!byChallenge.has(row.challenge)) byChallenge.set(row.challenge, []);
+      byChallenge.get(row.challenge).push(row);
+    }
+    el.innerHTML = [...byChallenge.entries()].map(([, rows]) => {
+      const name = rows[0].challengeName || rows[0].challenge;
+      const bars = rows.map((r) => `
+        <div class="mp-research-row">
+          <span class="mp-research-variant">${escapeHtml(r.variantLabel || r.variant)}</span>
+          <div class="mp-research-bar"><div style="width:${Math.round(r.winRate * 100)}%"></div></div>
+          <span class="mp-research-num">${Math.round(r.winRate * 100)}% defended · ${r.rounds} round${r.rounds === 1 ? '' : 's'} · avg stability ${Math.round(r.avgStability * 100)}%</span>
+        </div>`).join('');
+      return `<div class="mp-research-group"><h4>${escapeHtml(name)}</h4>${bars}</div>`;
+    }).join('');
   }
 
   function render() {
@@ -430,11 +502,8 @@ const Multiplayer = (function () {
     renderStatusLamp();
     document.getElementById('mpHeight').textContent = String(roomState.height || 0);
     document.getElementById('mpHostControls').style.opacity = isHost ? '1' : '0.45';
-    document.getElementById('mpPenalty').checked = !!roomState.penalty;
-    document.getElementById('mpSpeedup').value = roomState.speedup;
-    document.getElementById('mpWindow').value = roomState.windowSize;
-    document.getElementById('mpGoal').value = roomState.goalBlocks || 20;
-    document.getElementById('mpGoalLabel').textContent = String(roomState.goalBlocks || 20);
+    const speedInput = document.getElementById('mpSpeedup');
+    if (speedInput && document.activeElement !== speedInput) speedInput.value = roomState.speedup;
 
     const me = roomState.players.find((p) => p.id === roomState.you);
     if (me) {
@@ -470,11 +539,12 @@ const Multiplayer = (function () {
     el.innerHTML = players.map((p, index) => {
       const pct = Math.round(((p.score || 0) / maxScore) * 100);
       const you = p.id === roomState.you;
-      return `<div class="mp-lb-row ${you ? 'you' : ''} ${p.connected ? '' : 'dim'}">
+      return `<div class="mp-lb-row ${you ? 'you' : ''} ${p.connected ? '' : 'dim'} ${p.isBot ? 'bot' : ''}">
         <div class="mp-lb-head">
           <span class="mp-rank">${index + 1}${['ST', 'ND', 'RD'][index] || 'TH'}</span>
           <strong>${escapeHtml(p.name)}</strong>
           ${you ? '<span class="mp-pill accent">you</span>' : ''}
+          ${p.isBot ? '<span class="mp-pill bot">bot</span>' : ''}
           ${p.isHost ? '<span class="mp-pill">host</span>' : ''}
           <span class="mp-lb-score">${p.score || 0}</span>
         </div>
@@ -488,11 +558,24 @@ const Multiplayer = (function () {
     const fill = document.getElementById('mpRaceFill');
     const lead = document.getElementById('mpRaceLead');
     if (!fill || !roomState) return;
-    const goal = roomState.goalBlocks || 20;
-    const top = (roomState.players || [])[0];
-    const topBlocks = top?.blocksMined || 0;
-    fill.style.width = `${Math.min(100, Math.round((topBlocks / goal) * 100))}%`;
-    lead.textContent = top ? `${top.name} ${topBlocks}/${goal}` : `0/${goal}`;
+    const objective = roomState.objective;
+    if (objective) {
+      // Dominance objective: bar shows headroom below the limit; stability: progress vs threshold.
+      const pct = objective.type === 'dominance'
+        ? Math.min(100, Math.round((objective.value / objective.target) * 100))
+        : Math.min(100, Math.round((objective.value / objective.target) * 100));
+      fill.style.width = `${pct}%`;
+      fill.classList.toggle('bad', !objective.ok);
+      lead.textContent = `${roomState.challenge ? roomState.challenge.name + ' · ' : ''}${objective.label}`;
+    } else if (roomState.challenge) {
+      lead.textContent = `${roomState.challenge.name} · ${roomState.height}/${roomState.challenge.durationBlocks} blocks`;
+      fill.style.width = `${Math.min(100, Math.round((roomState.height / roomState.challenge.durationBlocks) * 100))}%`;
+      fill.classList.remove('bad');
+    } else {
+      lead.textContent = 'Waiting for a challenge — host hits Start';
+      fill.style.width = '0%';
+      fill.classList.remove('bad');
+    }
   }
 
   function prependBlock(block) {

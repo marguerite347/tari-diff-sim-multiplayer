@@ -1036,3 +1036,101 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
 @media (max-width: 900px) {
     .mp-lab { grid-template-columns: 1fr; }
 }
+
+/* --- Challenge cards & research --- */
+.mp-challenge-card { max-width: 560px; }
+.mp-challenge-brief {
+    font-size: 15px;
+    line-height: 1.5;
+    color: #c8d4ec;
+    margin: 12px 0;
+}
+.mp-variant-chip {
+    display: inline-block;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    color: #0c1020;
+    background: #ffb640;
+    padding: 6px 10px 5px;
+    border-radius: 4px;
+    letter-spacing: 0.04em;
+}
+.mp-challenge-objective {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    color: #3dffa2;
+    line-height: 1.8;
+    margin: 12px 0 4px;
+}
+.mp-victory-logo.fail { color: #ff4d5e; text-shadow: 0 0 24px rgba(255, 77, 94, 0.5); }
+.mp-result-stats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 18px;
+    margin: 10px 0 16px;
+}
+.mp-result-stats > div { text-align: center; }
+.mp-result-stats span {
+    display: block;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 7px;
+    color: #8ea0c0;
+    margin-bottom: 4px;
+}
+.mp-result-stats strong {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 13px;
+    color: #fff;
+}
+.mp-result-note {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: #8ea0c0;
+    margin-top: 4px;
+}
+.mp-research { grid-template-columns: 1fr; }
+.mp-research-group { margin-bottom: 14px; }
+.mp-research-group h4 {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 10px;
+    color: #ffb640;
+    margin: 0 0 8px;
+}
+.mp-research-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 280px) 1fr;
+    gap: 4px 12px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.mp-research-variant {
+    font-size: 12px;
+    font-weight: 700;
+    color: #c8d4ec;
+}
+.mp-research-bar {
+    height: 10px;
+    background: rgba(120, 140, 190, 0.15);
+    border-radius: 5px;
+    overflow: hidden;
+}
+.mp-research-bar > div {
+    height: 100%;
+    background: linear-gradient(90deg, #37b6ff, #3dffa2);
+    border-radius: 5px;
+}
+.mp-research-num {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: #8ea0c0;
+}
+.mp-race-fill.bad { background: linear-gradient(90deg, #ff4d5e, #ffb640); }
+.mp-bf-status.bad { background: rgba(255, 77, 94, 0.85); color: #fff; }
+.mp-pill.bot { background: rgba(255, 77, 94, 0.25); color: #ff8d99; }
+.mp-lb-row.bot { opacity: 0.75; }
+.mp-host-note {
+    font-size: 11px;
+    color: #8ea0c0;
+    align-self: center;
+}

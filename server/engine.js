@@ -41,10 +41,14 @@ class LwmaWindow {
     if (this.samples.length > this.blockWindow + 1) this.samples.shift();
   }
 
-  seedFlat(difficulty, targetTime, count) {
+  seedFlat(difficulty, targetTime, count, endTimestamp = null) {
     const diff = BigInt(difficulty);
     const step = BigInt(targetTime);
-    let ts = 1_000_000n;
+    // End the synthetic history at the sim clock so the first live block
+    // doesn't register as one giant (clamped) solve time.
+    let ts = endTimestamp !== null
+      ? BigInt(endTimestamp) - step * BigInt(count - 1)
+      : 1_000_000n;
     for (let i = 0; i < count; i++) {
       this.add(ts, diff);
       ts += step;
@@ -91,6 +95,23 @@ function createWindows(windowSize) {
     windows[algoId] = window;
   }
   return windows;
+}
+
+/**
+ * Re-seed each algo window at the difficulty that puts the CURRENT power
+ * distribution in equilibrium (expected 120s overall blocks), so challenge
+ * rounds measure the response to the attack, not to a mismatched baseline.
+ */
+function seedWindowsForPower(windows, totals, endTimestamp) {
+  for (const algoId of ALGO_IDS) {
+    const cfg = ALGO_CONFIG[algoId];
+    const power = Math.max(0, Math.round(Number(totals[algoId] || 0)));
+    const seedDiff = cfg.minDifficulty * SEED_DIFFICULTY_FACTOR;
+    let diff = (seedDiff * BigInt(power)) / 100n;
+    if (diff < cfg.minDifficulty) diff = cfg.minDifficulty;
+    windows[algoId].samples = [];
+    windows[algoId].seedFlat(diff, cfg.targetTime, windows[algoId].blockWindow + 1, endTimestamp);
+  }
 }
 
 function mulberry32(seed) {
@@ -238,6 +259,7 @@ module.exports = {
   ALGO_NAMES,
   ALGO_CONFIG,
   createWindows,
+  seedWindowsForPower,
   mulberry32,
   aggregateHashrates,
   mineOneBlock,

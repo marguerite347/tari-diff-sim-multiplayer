@@ -1,8 +1,13 @@
-# Tari Diff Sim — Multiplayer
+# Tari Diff Sim — Block Race
 
-Fork of [m4r1m0/tari-diff-sim](https://github.com/m4r1m0/tari-diff-sim) with **shareable multiplayer rooms**.
+Fork of [m4r1m0/tari-diff-sim](https://github.com/m4r1m0/tari-diff-sim) turned into a **community research game**: shareable multiplayer rooms where every round is a random network challenge, and every finished round becomes a datapoint comparing candidate Tari network changes against the status quo.
 
-Players join a room, allocate hashrate across Tari's four PoW algorithms, and watch a shared LWMA + TIP-004 mining race on a server-authoritative chain.
+Players join a room and allocate hashrate across Tari's four PoW algorithms on a 3D battlefield. Each round draws:
+
+- a random **challenge** ("level") — a scripted bot attack such as a hash flood, algo-hopping, or burst-mining whiplash, plus a no-attacker control round; and
+- a random **network variant** — status quo (LWMA-90, no penalty) or the proposed change (LWMA-45 + TIP-004 penalty).
+
+Players defend the chain with their sliders. The round is scored on objective metrics (rolling block-time stability, algo dominance), recorded to `data/rounds.jsonl`, and aggregated at `/api/research` — shown in-app as "Community research: status quo vs proposed" win rates per challenge.
 
 ## Quick start (local)
 
@@ -33,9 +38,15 @@ npm start
 
 - Server owns LWMA windows, difficulty, next-block sampling, and chain history.
 - Clients send intents only: join, set hashrate, start/stop (host).
-- Mining race: `rate_i = hashrate_i / targetDiff_i`, winner ~ categorical, block time ~ exponential.
-- TIP-004 consecutive same-algo penalty doubles target time per streak (host can toggle).
+- Mining race: `rate_i = hashrate_i / targetDiff_i`, winner ~ categorical, block time ~ exponential — the LWMA feedback loop is live, so difficulty responds to power shifts.
+- TIP-004 consecutive same-algo penalty doubles target time per streak (set by the challenge variant, not the host, to keep experiments clean).
 - `speedup` compresses simulated seconds into wall-clock time so rooms feel interactive.
+
+## Challenges & research data
+
+- Challenge scripts live in `server/challenges.js` (bots, schedules, objectives). Add a new level by adding a factory there.
+- Round results append to `data/rounds.jsonl`; aggregates are served from `/api/research`.
+- Windows are re-seeded to difficulty equilibrium for the opening power mix each round, so scores measure attack response rather than warm-up drift.
 
 ## Solo research UI
 

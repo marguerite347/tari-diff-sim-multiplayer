@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { RoomManager } = require('./room');
+const { aggregate } = require('./research');
 
 const PORT = Number(process.env.PORT || 8787);
 const ROOT = path.join(__dirname, '..');
@@ -15,6 +16,10 @@ app.use(express.static(ROOT));
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'tari-diff-sim-multiplayer' });
+});
+
+app.get('/api/research', (_req, res) => {
+  res.json({ ok: true, results: aggregate() });
 });
 
 const server = http.createServer(app);

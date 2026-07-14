@@ -4,10 +4,13 @@ const {
   ALGO_IDS,
   ALGO_NAMES,
   createWindows,
+  seedWindowsForPower,
   mulberry32,
   aggregateHashrates,
   mineOneBlock,
 } = require('./engine');
+const { drawChallenge, publicChallenge, ObjectiveTracker } = require('./challenges');
+const { recordRound } = require('./research');
 
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_CHAIN = 200;
@@ -26,14 +29,15 @@ function randomCode(length = 5) {
   return code;
 }
 
-function createPlayer(id, name) {
+function createPlayer(id, name, isBot = false) {
   const hashrates = { 0: 0, 1: 0, 2: 0, 3: 0 };
-  hashrates[1] = DEFAULT_HASHRATE;
+  if (!isBot) hashrates[1] = DEFAULT_HASHRATE;
   return {
     id,
     name: String(name || 'Miner').slice(0, 24),
     hashrates,
     connected: true,
+    isBot,
     blocksMined: 0,
     score: 0,
     streak: 0,
@@ -64,6 +68,9 @@ class Room {
     this.timer = null;
     this.rng = mulberry32((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
     this.createdAt = Date.now();
+    this.challenge = null;
+    this.objective = null;
+    this.lastResult = null;
   }
 
   addClient(playerId, ws, name) {
@@ -107,18 +114,19 @@ class Room {
 
   setSettings(playerId, settings = {}) {
     if (playerId !== this.hostId) return false;
-    if (typeof settings.penalty === 'boolean') this.penalty = settings.penalty;
     if (Number.isFinite(settings.speedup)) {
       this.speedup = Math.max(1, Math.min(600, Number(settings.speedup)));
     }
-    if (Number.isFinite(settings.goalBlocks)) {
-      this.goalBlocks = Math.max(5, Math.min(100, Math.floor(Number(settings.goalBlocks))));
-    }
-    if (Number.isFinite(settings.windowSize)) {
-      const next = Math.max(10, Math.min(90, Math.floor(Number(settings.windowSize))));
-      if (next !== this.windowSize && this.chain.length === 0) {
-        this.windowSize = next;
-        this.windows = createWindows(next);
+    // Window size and penalty are part of the drawn challenge variant — the
+    // experiment under test — so they can't be overridden once a round is armed.
+    if (!this.challenge) {
+      if (typeof settings.penalty === 'boolean') this.penalty = settings.penalty;
+      if (Number.isFinite(settings.windowSize)) {
+        const next = Math.max(10, Math.min(90, Math.floor(Number(settings.windowSize))));
+        if (next !== this.windowSize && this.chain.length === 0) {
+          this.windowSize = next;
+          this.windows = createWindows(next);
+        }
       }
     }
     return true;
@@ -134,10 +142,11 @@ class Room {
         streak: p.streak,
         bestStreak: p.bestStreak,
         connected: p.connected,
+        isBot: !!p.isBot,
         isHost: p.id === this.hostId,
         hashrates: p.hashrates,
       }))
-      .sort((a, b) => b.score - a.score || b.blocksMined - a.blocksMined);
+      .sort((a, b) => (a.isBot - b.isBot) || b.score - a.score || b.blocksMined - a.blocksMined);
   }
 
   awardBlock(block) {
@@ -186,6 +195,9 @@ class Room {
       totals: aggregateHashrates(this.players),
       recentBlocks: this.chain.slice(-40),
       shareUrlPath: `/?room=${this.code}`,
+      challenge: publicChallenge(this.challenge),
+      objective: this.objective ? this.objective.progress() : null,
+      lastResult: this.lastResult,
     };
   }
 
@@ -206,19 +218,66 @@ class Room {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can start' };
     if (this.running) return { ok: true };
 
-    const totals = aggregateHashrates(this.players);
-    const totalHr = ALGO_IDS.reduce((sum, id) => sum + totals[id], 0);
-    if (totalHr <= 0) return { ok: false, error: 'Assign some power before starting' };
-
-    if (this.roundOver) this._resetScoresAndChain(true);
+    if (this.roundOver) {
+      this._removeBots();
+      this.challenge = null;
+      this._resetScoresAndChain(true);
+    }
+    if (!this.challenge) this._armChallenge();
 
     this.running = true;
     this.roundOver = false;
     this.winnerId = null;
-    this.broadcast({ type: 'status', message: 'Race started — first to goal wins', running: true });
     this.broadcastState();
-    this.scheduleNext(80);
+    this.broadcast({
+      type: 'challenge_brief',
+      challenge: publicChallenge(this.challenge),
+    });
+    // Give players a beat to read the mission card before blocks start.
+    this.scheduleNext(4000);
     return { ok: true };
+  }
+
+  _armChallenge() {
+    this.challenge = drawChallenge(this.rng);
+    this.objective = new ObjectiveTracker(this.challenge);
+    this.lastResult = null;
+
+    // The drawn variant *is* the network config under test.
+    this.windowSize = this.challenge.variant.windowSize;
+    this.penalty = this.challenge.variant.penalty;
+    this.goalBlocks = this.challenge.durationBlocks;
+    this._resetScoresAndChain(true);
+
+    for (const bot of this.challenge.bots) {
+      const player = createPlayer(`bot:${bot.name}`, bot.name, true);
+      this.players.set(player.id, player);
+    }
+    this._applyBotSchedules(0);
+    // Start the round in difficulty equilibrium for the opening power mix so
+    // the scored objective measures the attack response, not warm-up drift.
+    seedWindowsForPower(this.windows, aggregateHashrates(this.players), this.simTimestamp);
+  }
+
+  _applyBotSchedules(height) {
+    if (!this.challenge) return;
+    for (const bot of this.challenge.bots) {
+      const player = this.players.get(`bot:${bot.name}`);
+      if (!player) continue;
+      let active = null;
+      for (const phase of bot.schedule) {
+        if (height >= phase.at) active = phase;
+      }
+      for (const algoId of ALGO_IDS) {
+        player.hashrates[algoId] = Number(active?.hashrates?.[algoId] || 0);
+      }
+    }
+  }
+
+  _removeBots() {
+    for (const id of [...this.players.keys()]) {
+      if (id.startsWith('bot:')) this.players.delete(id);
+    }
   }
 
   stop(playerId = null) {
@@ -237,6 +296,9 @@ class Room {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can reset' };
     this.roundOver = false;
     this.winnerId = null;
+    this._removeBots();
+    this.challenge = null;
+    this.objective = null;
     for (const [id, p] of this.players) {
       if (!p.connected) this.players.delete(id);
     }
@@ -265,21 +327,41 @@ class Room {
     }
   }
 
-  finishRound(winnerId) {
+  finishChallenge() {
     this.running = false;
     this.roundOver = true;
-    this.winnerId = winnerId;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
     }
-    const winner = this.players.get(winnerId);
+
+    const result = this.objective.evaluate();
+    const humans = [...this.players.values()].filter((p) => !p.isBot && p.connected);
+    const mvp = this.leaderboard().find((p) => !p.isBot);
+
+    this.lastResult = {
+      ...result,
+      challenge: publicChallenge(this.challenge),
+      mvpName: mvp?.name || null,
+      humans: humans.length,
+    };
+
+    recordRound({
+      ts: Date.now(),
+      room: this.code,
+      challenge: this.challenge.id,
+      challengeName: this.challenge.name,
+      variant: this.challenge.variant.id,
+      variantLabel: this.challenge.variant.label,
+      humans: humans.length,
+      blocks: this.height,
+      ...result,
+    });
+
     this.broadcast({
-      type: 'round_over',
-      winnerId,
-      winnerName: winner?.name || 'Unknown',
+      type: 'round_result',
+      result: this.lastResult,
       leaderboard: this.leaderboard(),
-      goalBlocks: this.goalBlocks,
     });
     this.broadcastState();
   }
@@ -301,20 +383,21 @@ class Room {
       this.chain.push(block);
       if (this.chain.length > MAX_CHAIN) this.chain.shift();
 
+      if (this.objective) this.objective.addBlock(block);
+      this._applyBotSchedules(this.height);
+
       this.broadcast({
         type: 'block_mined',
         block,
         totals: aggregateHashrates(this.players),
         leaderboard: this.leaderboard(),
         goalBlocks: this.goalBlocks,
+        objective: this.objective ? this.objective.progress() : null,
       });
 
-      if (block.minerId) {
-        const miner = this.players.get(block.minerId);
-        if (miner && miner.blocksMined >= this.goalBlocks) {
-          this.finishRound(block.minerId);
-          return;
-        }
+      if (this.challenge && this.height >= this.challenge.durationBlocks) {
+        this.finishChallenge();
+        return;
       }
 
       const nextDelay = Math.max(80, Math.min(3000, (block.blockTime / this.speedup) * 1000));

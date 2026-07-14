@@ -49,7 +49,7 @@
             <div class="mp-title-glow" aria-hidden="true"></div>
             <p class="mp-title-kicker">Tari LWMA network · TIP-004 rules</p>
             <h2 class="mp-title-logo">BLOCK<span>RACE</span></h2>
-            <p class="mp-title-sub">4 algorithms. 1 chain. First miner to the goal wins.</p>
+            <p class="mp-title-sub">Random challenges hit the Tari network. Defend it — and help test the next upgrade.</p>
 
             <div class="mp-title-form">
                 <label>Callsign
@@ -63,7 +63,7 @@
                 <button id="mpCreate" class="mp-arcade-btn primary">&#9654; New game</button>
                 <button id="mpJoin" class="mp-arcade-btn">Join game</button>
             </div>
-            <p class="mp-insert-coin">— share the room link to summon rival miners —</p>
+            <p class="mp-insert-coin">— every round is a random network challenge · your play becomes Tari research data —</p>
             <p class="mp-conn-line">Link: <span id="mpConnStatus">Idle</span> <span id="mpStatus"></span></p>
         </div>
 
@@ -72,10 +72,23 @@
             <div id="mpVictory" class="mp-victory" hidden>
                 <div class="mp-confetti" aria-hidden="true"></div>
                 <div class="mp-victory-card">
-                    <p class="mp-title-kicker">Round complete</p>
+                    <p class="mp-title-kicker" id="mpVictoryKicker">Round complete</p>
                     <h2 id="mpVictoryTitle" class="mp-victory-logo">WINNER</h2>
                     <p id="mpVictorySub"></p>
+                    <div id="mpVictoryStats" class="mp-result-stats"></div>
                     <button id="mpVictoryDismiss" class="mp-arcade-btn primary">Continue</button>
+                </div>
+            </div>
+            <div id="mpChallengeCard" class="mp-victory" hidden>
+                <div class="mp-victory-card mp-challenge-card">
+                    <p class="mp-title-kicker">Incoming challenge</p>
+                    <h2 id="mpChallengeName" class="mp-victory-logo">LEVEL</h2>
+                    <p id="mpChallengeBrief" class="mp-challenge-brief"></p>
+                    <p class="mp-challenge-meta">
+                        <span id="mpChallengeVariant" class="mp-variant-chip"></span>
+                    </p>
+                    <p id="mpChallengeObjective" class="mp-challenge-objective"></p>
+                    <button id="mpChallengeGo" class="mp-arcade-btn primary">Deploy rigs</button>
                 </div>
             </div>
 
@@ -94,7 +107,7 @@
                     <span class="mp-hud-value mp-counter" id="mpHeight">0</span>
                 </div>
                 <div class="mp-hud-cell mp-hud-race">
-                    <span class="mp-hud-label">Race to <strong id="mpGoalLabel">20</strong> · <span id="mpRaceLead">—</span></span>
+                    <span class="mp-hud-label"><span id="mpRaceLead">Waiting for a challenge</span></span>
                     <div class="mp-race-bar"><div id="mpRaceFill" class="mp-race-fill"></div></div>
                 </div>
                 <div class="mp-hud-cell mp-hud-actions">
@@ -142,14 +155,11 @@
                         </label>
                     </div>
                     <div id="mpHostControls" class="mp-host-grid">
-                        <label class="mp-check"><input id="mpPenalty" type="checkbox" checked> TIP-004 penalty</label>
                         <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="120"></label>
-                        <label>Window <input id="mpWindow" type="number" min="10" max="90" value="45"></label>
-                        <label>Goal <input id="mpGoal" type="number" min="5" max="100" value="20"></label>
+                        <span class="mp-host-note">Window &amp; TIP-004 penalty are dealt by the challenge draw — that&rsquo;s the experiment.</span>
                     </div>
                     <div class="mp-deck-buttons">
-                        <button id="mpApplyHashrate" class="mp-arcade-btn">Lock in</button>
-                        <button id="mpStart" class="mp-arcade-btn primary">&#9654; Start</button>
+                        <button id="mpStart" class="mp-arcade-btn primary">&#9654; Start challenge</button>
                         <button id="mpStop" class="mp-arcade-btn">Pause</button>
                         <button id="mpReset" class="mp-arcade-btn danger">New round</button>
                     </div>
@@ -184,6 +194,17 @@
                     <h3 class="mp-panel-title">Block times vs 120s target</h3>
                     <p class="mp-lab-hint">Dots are solve times (sim seconds); the line is the rolling mean.</p>
                     <div class="mp-lab-chart"><canvas id="mpChartBt"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Community research results -->
+            <div class="mp-lab mp-research">
+                <div class="mp-panel mp-lab-panel">
+                    <h3 class="mp-panel-title">Community research — status quo vs proposed</h3>
+                    <p class="mp-lab-hint">Every finished round is a datapoint. Win rate = how often players kept the network on target under each config.</p>
+                    <div id="mpResearch" class="mp-research-grid">
+                        <div class="dim">No rounds recorded yet — finish a challenge to add the first datapoint.</div>
+                    </div>
                 </div>
             </div>
         </div>
