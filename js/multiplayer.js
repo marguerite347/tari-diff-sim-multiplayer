@@ -207,6 +207,9 @@ const Multiplayer = (function () {
           btn.classList.toggle('primary', next);
         }
       });
+      document.getElementById('mpCopilotMemory')?.addEventListener('click', () => {
+        copilotLog(`What I've learned so far:\n${Copilot.memoryReport()}`, 'sys');
+      });
     }
 
     document.getElementById('mpSpeedup')?.addEventListener('change', () => {

@@ -13,9 +13,32 @@ const Copilot = (function () {
   const ALGO = ['RandomXM', 'Sha3x', 'RandomXT', 'Cuckaroo'];
   const STEP = 10;             // slider granularity
   const PER_ALGO_MAX = 300;    // slider max
-  const TOTAL_BUDGET = 400;    // self-imposed cap so the agent stays "one player"
   const SURGE_THRESHOLD = 120; // outside power delta that reads as an attack
-  const ACT_COOLDOWN = 4;      // min blocks between reallocation moves
+  const MEMORY_KEY = 'copilotMemory.v1';
+  const EXPLORE_RATE = 0.25;   // chance to try a non-best strategy and keep learning
+
+  /**
+   * Strategy profiles — the tunables the agent learns over. Memory tracks how
+   * each profile performs per (challenge, variant) and future rounds pick the
+   * best performer (with some exploration).
+   */
+  const PROFILES = {
+    balanced: {
+      label: 'BALANCED',
+      desc: 'moderate counter-moves, moderate patience',
+      avoidMult: 0.15, strandedBoost: 3, cooldown: 4, budget: 400, counterWeight: 0.7,
+    },
+    hardCounter: {
+      label: 'HARD COUNTER',
+      desc: 'aggressive counter-weighting, fast reactions, full budget',
+      avoidMult: 0.05, strandedBoost: 4.5, cooldown: 3, budget: 400, counterWeight: 1.0,
+    },
+    lightTouch: {
+      label: 'LIGHT TOUCH',
+      desc: 'small steady footprint, trust the LWMA to self-correct',
+      avoidMult: 0.4, strandedBoost: 2, cooldown: 6, budget: 220, counterWeight: 0.35,
+    },
+  };
 
   let enabled = false;
   let api = null;              // { applyHashrates(alloc), log(text, kind) }
@@ -23,8 +46,79 @@ const Copilot = (function () {
   let lastActHeight = -99;
   let lastAttackKey = '';
   let currentAlloc = null;
+  let profile = PROFILES.balanced;
+  let profileId = 'balanced';
+  let roundKey = null;         // "<challengeId>::<variantId>" for the active round
 
   function init(hooks) { api = hooks; }
+
+  // --- Memory (persists across sessions in this browser) ---
+
+  function loadMemory() {
+    try { return JSON.parse(localStorage.getItem(MEMORY_KEY)) || {}; }
+    catch { return {}; }
+  }
+
+  function saveMemory(memory) {
+    try { localStorage.setItem(MEMORY_KEY, JSON.stringify(memory)); }
+    catch { /* storage unavailable — agent still plays, just doesn't remember */ }
+  }
+
+  function memoryFor(key) {
+    const memory = loadMemory();
+    if (!memory[key]) memory[key] = { plays: 0, profiles: {}, lessons: [] };
+    return { memory, entry: memory[key] };
+  }
+
+  function profileStats(entry, id) {
+    if (!entry.profiles[id]) entry.profiles[id] = { plays: 0, wins: 0, stabilitySum: 0 };
+    return entry.profiles[id];
+  }
+
+  function pickProfile(entry) {
+    const tried = Object.entries(entry.profiles).filter(([, s]) => s.plays > 0);
+    const untried = Object.keys(PROFILES).filter((id) => !entry.profiles[id]?.plays);
+
+    if (!tried.length) {
+      return { id: 'balanced', why: 'no memory of this challenge/config combo yet — starting BALANCED to gather a baseline' };
+    }
+    // Prefer trying every profile once before exploiting — always, if nothing
+    // has won yet; otherwise half the time.
+    const nothingWon = tried.every(([, s]) => s.wins === 0);
+    if (untried.length && (nothingWon || Math.random() < 0.5)) {
+      const id = untried[0];
+      const why = nothingWon
+        ? `nothing I've tried here has won yet, so I'm switching to untested ${PROFILES[id].label}`
+        : `I have not tried ${PROFILES[id].label} on this combo yet — testing it to complete my map`;
+      return { id, why };
+    }
+    // Epsilon-greedy: usually exploit the best, sometimes re-test an alternative.
+    const scored = tried.map(([id, s]) => ({
+      id,
+      score: (s.wins / s.plays) + 0.3 * (s.stabilitySum / s.plays),
+      record: `${s.wins}/${s.plays} wins, avg stability ${Math.round((s.stabilitySum / s.plays) * 100)}%`,
+    })).sort((a, b) => b.score - a.score);
+
+    if (Math.random() < EXPLORE_RATE && scored.length > 1) {
+      const alt = scored[1 + Math.floor(Math.random() * (scored.length - 1))];
+      return { id: alt.id, why: `exploring — re-testing ${PROFILES[alt.id].label} (${alt.record}) to make sure my ranking still holds` };
+    }
+    const best = scored[0];
+    return { id: best.id, why: `memory says ${PROFILES[best.id].label} performs best here (${best.record})` };
+  }
+
+  function composeLesson(result, usedProfileId) {
+    const p = PROFILES[usedProfileId];
+    const stability = Math.round((result.stability || 0) * 100);
+    if (result.success) {
+      return `${p.label} held (stability ${stability}%, mean BT ${result.meanBt}s). Keep: ${p.desc}.`;
+    }
+    const hot = (result.meanBt || 120) < 100;
+    const diagnosis = hot
+      ? 'the chain ran hot — my counter-shrink was not enough'
+      : 'blocks stalled — stranded difficulty needed more of my hash sooner';
+    return `${p.label} failed (stability ${stability}%, mean BT ${result.meanBt}s) — ${diagnosis}.`;
+  }
 
   function setEnabled(on, state) {
     enabled = on;
@@ -47,6 +141,18 @@ const Copilot = (function () {
     lastActHeight = -99;
     lastAttackKey = '';
     if (!enabled || !api) return;
+
+    // Consult memory of past rounds on this challenge + config combo.
+    roundKey = `${challenge.id}::${challenge.variantId}`;
+    const { entry } = memoryFor(roundKey);
+    const choice = pickProfile(entry);
+    profileId = choice.id;
+    profile = PROFILES[profileId];
+
+    if (entry.plays > 0) {
+      api.log(`Memory check: I have played ${challenge.name} under this config ${entry.plays} time${entry.plays === 1 ? '' : 's'} before. ${entry.lessons.length ? `Last lesson: ${entry.lessons[entry.lessons.length - 1]}` : ''}`, 'sys');
+    }
+    api.log(`Strategy: ${profile.label} (${profile.desc}) — ${choice.why}.`, 'plan');
 
     const parts = [`Mission accepted: ${challenge.name} under ${challenge.variantLabel}.`];
     if (challenge.variantId === 'lwma90') {
@@ -124,7 +230,7 @@ const Copilot = (function () {
 
     const mustAct = attackKey !== lastAttackKey;
     lastAttackKey = attackKey;
-    if (!mustAct && block.height - lastActHeight < ACT_COOLDOWN) return;
+    if (!mustAct && block.height - lastActHeight < profile.cooldown) return;
 
     // --- Decide allocation weights ---
     const reasons = [];
@@ -137,11 +243,11 @@ const Copilot = (function () {
     }
     for (let i = 0; i < 4; i++) {
       if (attacked[i]) {
-        weights[i] *= 0.15;
+        weights[i] *= profile.avoidMult;
         reasons.push(`staying off ${ALGO[i]} — feeding an attacked lane speeds it up further and risks penalty streaks`);
       }
       if (stranded[i]) {
-        weights[i] *= 3;
+        weights[i] *= profile.strandedBoost;
         reasons.push(`heavy power to ${ALGO[i]} to grind its stranded difficulty back down`);
       }
       if (penalized[i]) {
@@ -155,13 +261,13 @@ const Copilot = (function () {
     let targetTotal;
     if (objective?.type === 'dominance') {
       const surgeTotal = Math.max(0, othersTotal - (base.networkTotal - 100));
-      targetTotal = clamp(100 + surgeTotal * 0.7, 100, TOTAL_BUDGET);
+      targetTotal = clamp(100 + surgeTotal * profile.counterWeight, 100, profile.budget);
       if (surgeTotal > SURGE_THRESHOLD) {
         reasons.push(`raising my total to ${Math.round(targetTotal)} to counter-weight the attacker\u2019s share`);
       }
     } else {
       // Stability: keep total network power near its baseline.
-      targetTotal = clamp(base.networkTotal - othersTotal, 40, TOTAL_BUDGET);
+      targetTotal = clamp(base.networkTotal - othersTotal, 40, profile.budget);
       const delta = othersTotal - (base.networkTotal - sum(currentAlloc || mine));
       if (delta > SURGE_THRESHOLD) {
         reasons.push(`outside power is +${Math.round(delta)} over baseline, so I shrink my footprint to slow total block production${targetTotal <= 60 ? ' (I can only offset so much — the LWMA must do the rest)' : ''}`);
@@ -193,6 +299,40 @@ const Copilot = (function () {
       ? 'We held the network — objective met.'
       : 'We lost this one — the objective slipped away.';
     api.log(`${verdict} Final read: stability ${Math.round((result.stability || 0) * 100)}%, mean block time ${result.meanBt}s vs 120s target, top algo peaked at ${Math.round((result.maxShare || 0) * 100)}%, ${result.penaltyEvents} TIP-004 penalties. This datapoint was recorded under "${result.challenge?.variantLabel}".`, result.success ? 'plan' : 'alert');
+
+    // Postmortem: update memory so the next round on this combo starts smarter.
+    if (!roundKey) return;
+    const { memory, entry } = memoryFor(roundKey);
+    entry.plays += 1;
+    const stats = profileStats(entry, profileId);
+    stats.plays += 1;
+    if (result.success) stats.wins += 1;
+    stats.stabilitySum += result.stability || 0;
+
+    const lesson = composeLesson(result, profileId);
+    entry.lessons.push(lesson);
+    if (entry.lessons.length > 5) entry.lessons.shift();
+    saveMemory(memory);
+
+    const record = `${stats.wins}/${stats.plays}`;
+    api.log(`Postmortem saved: "${lesson}" ${PROFILES[profileId].label} is now ${record} on this combo. I'll use this next time the same challenge and config come up.`, 'sys');
+    roundKey = null;
+  }
+
+  /** Human-readable summary of everything learned so far. */
+  function memoryReport() {
+    const memory = loadMemory();
+    const keys = Object.keys(memory);
+    if (!keys.length) return 'Memory is empty — no completed rounds yet.';
+    return keys.map((key) => {
+      const [challenge, variant] = key.split('::');
+      const entry = memory[key];
+      const profiles = Object.entries(entry.profiles)
+        .filter(([, s]) => s.plays > 0)
+        .map(([id, s]) => `${PROFILES[id].label} ${s.wins}/${s.plays}`)
+        .join(', ');
+      return `${challenge.toUpperCase()} @ ${variant}: ${entry.plays} plays — ${profiles || 'none'}`;
+    }).join('\n');
   }
 
   function applyAlloc(alloc, narration) {
@@ -209,7 +349,7 @@ const Copilot = (function () {
     return unique[0].charAt(0).toUpperCase() + unique.join('; ').slice(1) + '.';
   }
 
-  return { init, setEnabled, isEnabled, onBrief, onBlock, onResult };
+  return { init, setEnabled, isEnabled, onBrief, onBlock, onResult, memoryReport };
 })();
 
 if (typeof window !== 'undefined') window.Copilot = Copilot;

@@ -1158,6 +1158,7 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     border-left: 3px solid #37b6ff;
     border-radius: 4px;
     padding: 7px 9px;
+    white-space: pre-line;
     animation: mp-entry-in 0.25s ease;
 }
 .mp-copilot-entry.plan { border-left-color: #3dffa2; }

@@ -23,13 +23,10 @@ const App = (function() {
     function init() {
         blocks = window.BLOCKS_DATA.blocks;
         const loading = document.getElementById('loading');
-        const roomParam = new URLSearchParams(location.search).get('room');
 
-        if (roomParam) {
-            // Room invite links should open multiplayer immediately.
-            loading.style.display = 'none';
-            showTab('tab-multiplayer');
-        }
+        // Block Race is the default view — run the simulator warm-up silently
+        // in the background instead of blocking the page with the overlay.
+        loading.style.display = 'none';
 
         setTimeout(async () => {
             try {
@@ -37,8 +34,9 @@ const App = (function() {
                 currentScenarios = Simulation.generateScenarios(
                     DEFAULT_MIN_WINDOW, DEFAULT_MAX_WINDOW, DEFAULT_STEP
                 );
-                simulationData = await runSimulationsWithProgress(currentScenarios, currentBaseSeed);
+                simulationData = await runSimulationsWithProgress(currentScenarios, currentBaseSeed, true);
             } catch (error) {
+                loading.style.display = 'flex';
                 loading.innerHTML = `<div class="error">Error: ${error.message}<br><pre>${error.stack}</pre></div>`;
                 return;
             }
@@ -54,9 +52,8 @@ const App = (function() {
             Charts.renderSummaryTable(simulationData);
             Charts.renderValidation(validationResults);
 
-            if (roomParam) showTab('tab-multiplayer');
-            else renderTabCharts('tab-baseline');
-            loading.style.display = 'none';
+            const activeTab = document.querySelector('.tab-button.active');
+            if (activeTab) renderTabCharts(activeTab.dataset.tab);
         }, INIT_DELAY_MS);
     }
 

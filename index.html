@@ -33,8 +33,8 @@
     </div>
 
     <div class="tab-bar">
-        <button class="tab-button" data-tab="tab-multiplayer" id="tabBtnMultiplayer">&#9654; Block Race</button>
-        <button class="tab-button active" data-tab="tab-baseline">Baseline</button>
+        <button class="tab-button active" data-tab="tab-multiplayer" id="tabBtnMultiplayer">&#9654; Block Race</button>
+        <button class="tab-button" data-tab="tab-baseline">Baseline</button>
         <button class="tab-button" data-tab="tab-blocktime">Block Time Comparison</button>
         <button class="tab-button" data-tab="tab-difficulty">Difficulty Comparison</button>
         <button class="tab-button" data-tab="tab-lanesplit">Algo / Lane Split</button>
@@ -42,7 +42,7 @@
         <button class="tab-button" data-tab="tab-validation">Validation</button>
     </div>
 
-    <div id="tab-multiplayer" class="tab-content mp-arcade">
+    <div id="tab-multiplayer" class="tab-content active mp-arcade">
         <div class="mp-scanlines" aria-hidden="true"></div>
 
         <div id="mpLobby" class="mp-title-screen">
@@ -170,7 +170,8 @@
                     <h3 class="mp-panel-title">Copilot</h3>
                     <div class="mp-copilot-head">
                         <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot: OFF</button>
-                        <span class="mp-copilot-hint">Let the agent run your rigs — it explains every move.</span>
+                        <button id="mpCopilotMemory" class="mp-arcade-btn small">Memory</button>
+                        <span class="mp-copilot-hint">The agent runs your rigs, explains every move, and learns from each postmortem.</span>
                     </div>
                     <div id="mpCopilotLog" class="mp-copilot-log">
                         <div class="dim mp-copilot-empty">Autopilot is off. Flip it on and I&rsquo;ll play this round for you, narrating my decisions and why.</div>
@@ -222,7 +223,7 @@
         </div>
     </div>
 
-    <div id="tab-baseline" class="tab-content active">
+    <div id="tab-baseline" class="tab-content">
         <div class="info-bar">Actual historical data from the Tari mainnet node (via gRPC). Block range 295000&ndash;296521. Target block time: 120s (2 min).</div>
         <div class="zoom-bar">
             <span>Zoom:</span>
