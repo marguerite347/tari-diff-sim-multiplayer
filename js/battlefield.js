@@ -7,6 +7,7 @@
  */
 const Battlefield = (function () {
   const LANE_COLORS = [0xff4d5e, 0x37b6ff, 0x3dffa2, 0xffb640];
+  const ALGO_LABELS = ['RandomXM', 'Sha3x', 'RandomXT', 'Cuckaroo'];
   const MAX_UNITS = 70;
   const ARMY_RADIUS = 26;
   const TOWER_MAX = 40;
@@ -21,6 +22,7 @@ const Battlefield = (function () {
   const towerBlocks = [];   // meshes stacked in the middle
   const flyingBlocks = [];  // { mesh, from, to, t }
   const penaltyCones = [];
+  const banners = [];       // per algo floating telemetry sprite
   let dummy = null;
   let clock = null;
 
@@ -223,6 +225,82 @@ const Battlefield = (function () {
     scene.add(flag);
 
     armies[algo] = { mesh, count: 0, basePositions, charge: 0 };
+    buildBanner(algo, cx, cz);
+  }
+
+  function buildBanner(algo, cx, cz) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 160;
+    const texture = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false }));
+    sprite.position.set(cx * 1.3, 11.5, cz * 1.3);
+    sprite.scale.set(15, 4.7, 1);
+    scene.add(sprite);
+    banners[algo] = { sprite, canvas, ctx: canvas.getContext('2d'), texture };
+    drawBanner(algo, { name: ALGO_LABELS[algo], diffText: 'DIFF —', penalty: 1 });
+  }
+
+  function drawBanner(algo, { name, diffText, penalty }) {
+    const banner = banners[algo];
+    if (!banner) return;
+    const { ctx, canvas, texture } = banner;
+    const color = '#' + LANE_COLORS[algo].toString(16).padStart(6, '0');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = 'rgba(10, 14, 24, 0.78)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 6;
+    roundRect(ctx, 6, 6, canvas.width - 12, canvas.height - 12, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    ctx.font = 'bold 40px "Rajdhani", monospace';
+    ctx.fillText(name.toUpperCase(), canvas.width / 2, 58);
+
+    if (penalty > 1) {
+      ctx.fillStyle = '#ff4d5e';
+      ctx.font = 'bold 44px "Rajdhani", monospace';
+      ctx.fillText(`${diffText} · PENALTY x${penalty}`, canvas.width / 2, 118);
+    } else {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 44px "Rajdhani", monospace';
+      ctx.fillText(diffText, canvas.width / 2, 118);
+    }
+    texture.needsUpdate = true;
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function formatDifficulty(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    const units = ['', 'K', 'M', 'G', 'T', 'P', 'E'];
+    let u = 0;
+    let v = n;
+    while (v >= 1000 && u < units.length - 1) { v /= 1000; u++; }
+    return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)}${units[u]}`;
+  }
+
+  function setTelemetry(entries) {
+    if (!started || !Array.isArray(entries)) return;
+    for (const entry of entries) {
+      drawBanner(entry.algo, {
+        name: ALGO_LABELS[entry.algo],
+        diffText: `DIFF ${formatDifficulty(entry.difficulty)}`,
+        penalty: entry.penaltyMultiplier || 1,
+      });
+    }
   }
 
   function setPowers(totals) {
@@ -388,7 +466,7 @@ const Battlefield = (function () {
     renderer.render(scene, camera);
   }
 
-  return { init, setPowers, blockMined, reset, onResize };
+  return { init, setPowers, blockMined, setTelemetry, reset, onResize };
 })();
 
 if (typeof window !== 'undefined') window.Battlefield = Battlefield;

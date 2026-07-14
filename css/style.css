@@ -1015,3 +1015,24 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     border-radius: 999px;
     pointer-events: none;
 }
+
+/* --- LWMA telemetry lab --- */
+.mp-lab {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 0 20px 20px;
+}
+.mp-lab-panel { min-width: 0; }
+.mp-lab-hint {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #8ea0c0;
+}
+.mp-lab-chart {
+    position: relative;
+    height: 220px;
+}
+@media (max-width: 900px) {
+    .mp-lab { grid-template-columns: 1fr; }
+}

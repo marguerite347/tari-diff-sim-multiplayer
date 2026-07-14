@@ -51,6 +51,7 @@ const Multiplayer = (function () {
         break;
       case 'room_state':
         roomState = msg;
+        if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
         render();
         if (msg.roundOver) showVictory(msg);
         else hideVictory();
@@ -64,6 +65,7 @@ const Multiplayer = (function () {
         if (msg.goalBlocks) roomState.goalBlocks = msg.goalBlocks;
         document.getElementById('mpHeight').textContent = String(msg.block.height);
         updateBattlefield(msg.block);
+        recordTelemetry(msg.block);
         prependBlock(msg.block);
         renderLeaderboard();
         renderRaceTrack();
@@ -255,6 +257,7 @@ const Multiplayer = (function () {
     if (!window.Battlefield) return;
     if (roomState?.totals) Battlefield.setPowers(roomState.totals);
     if (block) Battlefield.blockMined(block);
+    if (block?.telemetry) Battlefield.setTelemetry(block.telemetry);
     const heightEl = document.getElementById('mpBfHeight');
     if (heightEl) heightEl.textContent = `BLOCK ${roomState?.height || 0}`;
     const statusEl = document.getElementById('mpBfStatus');
@@ -264,6 +267,135 @@ const Multiplayer = (function () {
       else if (!roomState.running) statusEl.textContent = 'ARMIES ARE ASSEMBLING';
       else if (top) statusEl.textContent = `${top.name.toUpperCase()} IS WINNING — ${top.blocksMined}/${roomState.goalBlocks}`;
     }
+  }
+
+  // --- LWMA telemetry lab (difficulty + block time charts) ---
+  const LAB_MAX_POINTS = 150;
+  const LANE_HEX = ['#ff4d5e', '#37b6ff', '#3dffa2', '#ffb640'];
+  const labHistory = { heights: [], diffs: [[], [], [], []], blockTimes: [], rollingBt: [], target: [] };
+  let chartDiff = null;
+  let chartBt = null;
+
+  function resetTelemetry() {
+    labHistory.heights.length = 0;
+    labHistory.blockTimes.length = 0;
+    labHistory.rollingBt.length = 0;
+    labHistory.target.length = 0;
+    for (const series of labHistory.diffs) series.length = 0;
+    if (chartDiff) chartDiff.update('none');
+    if (chartBt) chartBt.update('none');
+  }
+
+  function recordTelemetry(block) {
+    if (!block?.telemetry) return;
+    labHistory.heights.push(block.height);
+    for (const entry of block.telemetry) {
+      labHistory.diffs[entry.algo]?.push(Number(entry.difficulty));
+    }
+    labHistory.blockTimes.push(block.blockTime);
+    labHistory.target.push(120);
+    const window = labHistory.blockTimes.slice(-15);
+    labHistory.rollingBt.push(window.reduce((a, b) => a + b, 0) / window.length);
+
+    if (labHistory.heights.length > LAB_MAX_POINTS) {
+      labHistory.heights.shift();
+      labHistory.blockTimes.shift();
+      labHistory.rollingBt.shift();
+      labHistory.target.shift();
+      for (const series of labHistory.diffs) series.shift();
+    }
+
+    ensureLabCharts();
+    if (chartDiff) chartDiff.update('none');
+    if (chartBt) chartBt.update('none');
+    const windowLabel = document.getElementById('mpLabWindow');
+    if (windowLabel && roomState) windowLabel.textContent = String(roomState.windowSize);
+  }
+
+  function ensureLabCharts() {
+    if (chartDiff || typeof Chart === 'undefined') return;
+    const diffCanvas = document.getElementById('mpChartDiff');
+    const btCanvas = document.getElementById('mpChartBt');
+    if (!diffCanvas || !btCanvas) return;
+
+    const axisStyle = {
+      ticks: { color: '#8ea0c0', font: { size: 10 } },
+      grid: { color: 'rgba(120, 140, 190, 0.12)' },
+    };
+    const baseOpts = {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { labels: { color: '#c8d4ec', boxWidth: 10, font: { size: 10 } } },
+      },
+      scales: {
+        x: { ...axisStyle, title: { display: true, text: 'height', color: '#8ea0c0', font: { size: 10 } } },
+      },
+    };
+
+    chartDiff = new Chart(diffCanvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: labHistory.heights,
+        datasets: ALGO_NAMES.map((name, i) => ({
+          label: name,
+          data: labHistory.diffs[i],
+          borderColor: LANE_HEX[i],
+          backgroundColor: LANE_HEX[i],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.25,
+        })),
+      },
+      options: {
+        ...baseOpts,
+        scales: {
+          ...baseOpts.scales,
+          y: { ...axisStyle, type: 'logarithmic', title: { display: true, text: 'target difficulty (log)', color: '#8ea0c0', font: { size: 10 } } },
+        },
+      },
+    });
+
+    chartBt = new Chart(btCanvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: labHistory.heights,
+        datasets: [
+          {
+            label: 'solve time',
+            data: labHistory.blockTimes,
+            borderColor: 'rgba(200, 212, 236, 0)',
+            backgroundColor: 'rgba(200, 212, 236, 0.7)',
+            pointRadius: 2,
+            showLine: false,
+          },
+          {
+            label: 'rolling mean (15)',
+            data: labHistory.rollingBt,
+            borderColor: '#3dffa2',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+          },
+          {
+            label: 'target 120s',
+            data: labHistory.target,
+            borderColor: 'rgba(255, 182, 64, 0.9)',
+            borderDash: [6, 4],
+            borderWidth: 1.5,
+            pointRadius: 0,
+          },
+        ],
+      },
+      options: {
+        ...baseOpts,
+        scales: {
+          ...baseOpts.scales,
+          y: { ...axisStyle, title: { display: true, text: 'seconds (sim)', color: '#8ea0c0', font: { size: 10 } } },
+        },
+      },
+    });
   }
 
   function showVictory(state, winnerName) {

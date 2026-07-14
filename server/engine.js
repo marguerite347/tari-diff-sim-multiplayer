@@ -79,13 +79,15 @@ class LwmaWindow {
   }
 }
 
+const SEED_DIFFICULTY_FACTOR = 10n;
+
 function createWindows(windowSize) {
   const windows = {};
   for (const algoId of ALGO_IDS) {
     const cfg = ALGO_CONFIG[algoId];
     const window = new LwmaWindow(windowSize, cfg.targetTime, cfg.minDifficulty, MAX_U64);
     // Seed so the first live blocks have a full window.
-    window.seedFlat(cfg.minDifficulty * 10n, cfg.targetTime, windowSize + 1);
+    window.seedFlat(cfg.minDifficulty * SEED_DIFFICULTY_FACTOR, cfg.targetTime, windowSize + 1);
     windows[algoId] = window;
   }
   return windows;
@@ -115,9 +117,11 @@ function applyPenalty(window, algoId, lastWinner, consecutiveCount, penaltyEnabl
 
 function computeAlgoRates(windows, hashrates, lastWinner, consecutiveCount, penaltyEnabled) {
   const algoRates = [];
-  // Abstract power: 100 units on one algo ≈ 120s expected block time when solo.
+  // Abstract power maps to a hashrate anchored at the seeded difficulty, so
+  // rate = hashrate / difficulty and the LWMA feedback loop stays intact:
+  // 100 power on an algo is in equilibrium at the seed difficulty (480s/algo,
+  // 120s overall when all four algos run at 100).
   const REFERENCE_POWER = 100;
-  const TARGET_BLOCK_SECONDS = 120;
 
   for (const algoId of ALGO_IDS) {
     const cfg = ALGO_CONFIG[algoId];
@@ -128,12 +132,9 @@ function computeAlgoRates(windows, hashrates, lastWinner, consecutiveCount, pena
     if (targetDifficulty === null) targetDifficulty = cfg.minDifficulty;
 
     const power = Number(hashrates[algoId] || 0);
-    const targetTime = Number(windows[algoId].targetTime);
-    const baseTime = Number(cfg.targetTime);
-    const penaltyFactor = targetTime > 0 ? baseTime / targetTime : 0;
-    const rate = power > 0
-      ? ((power / REFERENCE_POWER) / TARGET_BLOCK_SECONDS) * penaltyFactor
-      : 0;
+    const seedDifficulty = Number(cfg.minDifficulty * SEED_DIFFICULTY_FACTOR);
+    const hashrate = (power / REFERENCE_POWER) * (seedDifficulty / Number(cfg.targetTime));
+    const rate = power > 0 ? hashrate / Number(targetDifficulty) : 0;
 
     algoRates.push({ algo: algoId, targetDifficulty, rate, penaltyMultiplier });
   }
@@ -203,6 +204,13 @@ function mineOneBlock(state, players, rng) {
     minerId,
     minerName: minerId ? players.get(minerId)?.name || 'unknown' : null,
     hashrates,
+    // Full per-algo state so clients can chart LWMA response, not just the winner.
+    telemetry: algoRates.map((entry) => ({
+      algo: entry.algo,
+      difficulty: entry.targetDifficulty.toString(),
+      penaltyMultiplier: entry.penaltyMultiplier,
+      share: totalRate > 0 ? entry.rate / totalRate : 0,
+    })),
   };
 }
 
