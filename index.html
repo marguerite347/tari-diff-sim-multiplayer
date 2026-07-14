@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tari Difficulty Algorithm Simulation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
     <script src="lib/chart.min.js"></script>
 </head>
@@ -30,7 +33,7 @@
     </div>
 
     <div class="tab-bar">
-        <button class="tab-button" data-tab="tab-multiplayer" id="tabBtnMultiplayer">Multiplayer</button>
+        <button class="tab-button" data-tab="tab-multiplayer" id="tabBtnMultiplayer">&#9654; Block Race</button>
         <button class="tab-button active" data-tab="tab-baseline">Baseline</button>
         <button class="tab-button" data-tab="tab-blocktime">Block Time Comparison</button>
         <button class="tab-button" data-tab="tab-difficulty">Difficulty Comparison</button>
@@ -39,82 +42,148 @@
         <button class="tab-button" data-tab="tab-validation">Validation</button>
     </div>
 
-    <div id="tab-multiplayer" class="tab-content">
-        <div class="info-bar">
-            Create a room, copy the share link, and friends join the same simulated multi-algo network.
-            Each player allocates hashrate across RandomXM / Sha3x / RandomXT / Cuckaroo. The server runs a shared LWMA + TIP-004 race.
-        </div>
+    <div id="tab-multiplayer" class="tab-content mp-arcade">
+        <div class="mp-scanlines" aria-hidden="true"></div>
 
-        <div class="mp-conn">Status: <span id="mpConnStatus">Idle</span> · <span id="mpStatus"></span></div>
+        <div id="mpLobby" class="mp-title-screen">
+            <div class="mp-title-glow" aria-hidden="true"></div>
+            <p class="mp-title-kicker">Tari LWMA network · TIP-004 rules</p>
+            <h2 class="mp-title-logo">BLOCK<span>RACE</span></h2>
+            <p class="mp-title-sub">4 algorithms. 1 chain. First miner to the goal wins.</p>
 
-        <div id="mpLobby" class="mp-card">
-            <h2>Join a live room</h2>
-            <div class="mp-form-row">
-                <label>Your name <input id="mpName" type="text" maxlength="24" placeholder="Miner" value="Miner"></label>
-                <label>Room code <input id="mpRoomCode" type="text" maxlength="8" placeholder="ABCDE" style="text-transform:uppercase"></label>
+            <div class="mp-title-form">
+                <label>Callsign
+                    <input id="mpName" type="text" maxlength="24" placeholder="MINER" value="Miner">
+                </label>
+                <label>Room code
+                    <input id="mpRoomCode" type="text" maxlength="8" placeholder="ABCDE" style="text-transform:uppercase">
+                </label>
             </div>
-            <div class="mp-form-row">
-                <button id="mpCreate" class="run-btn">Create room</button>
-                <button id="mpJoin" class="run-btn rerandomize-btn">Join room</button>
+            <div class="mp-title-buttons">
+                <button id="mpCreate" class="mp-arcade-btn primary">&#9654; New game</button>
+                <button id="mpJoin" class="mp-arcade-btn">Join game</button>
             </div>
-            <p class="dim">Shareable URL format: <code>/?room=CODE</code></p>
+            <p class="mp-insert-coin">— share the room link to summon rival miners —</p>
+            <p class="mp-conn-line">Link: <span id="mpConnStatus">Idle</span> <span id="mpStatus"></span></p>
         </div>
 
         <div id="mpSession" class="mp-session" style="display:none">
-            <div class="mp-card">
-                <div class="mp-form-row" style="justify-content:space-between;align-items:center">
-                    <div>
-                        Room <strong id="mpRoomLabel">—</strong>
-                        <span id="mpRunning" class="mp-pill">PAUSED</span>
-                        · height <strong id="mpHeight">0</strong>
-                    </div>
-                    <div class="mp-form-row">
-                        <button id="mpCopyLink" class="run-btn">Copy share link</button>
-                        <button id="mpLeave" class="run-btn rerandomize-btn">Leave</button>
-                    </div>
+            <div id="mpToast" class="mp-toast" hidden></div>
+            <div id="mpVictory" class="mp-victory" hidden>
+                <div class="mp-confetti" aria-hidden="true"></div>
+                <div class="mp-victory-card">
+                    <p class="mp-title-kicker">Round complete</p>
+                    <h2 id="mpVictoryTitle" class="mp-victory-logo">WINNER</h2>
+                    <p id="mpVictorySub"></p>
+                    <button id="mpVictoryDismiss" class="mp-arcade-btn primary">Continue</button>
                 </div>
-                <p class="dim">Share: <code id="mpShareLink"></code></p>
             </div>
 
-            <div class="mp-grid">
-                <div class="mp-card">
-                    <h3>Your mining power</h3>
-                    <p class="dim">Abstract power units (comparable across algos). 100 ≈ target 120s block time if you are alone on one algo.</p>
-                    <div class="mp-hr-inputs">
-                        <label>RandomXM <input id="mpHr0" type="number" min="0" step="10" value="0"></label>
-                        <label>Sha3x <input id="mpHr1" type="number" min="0" step="10" value="100"></label>
-                        <label>RandomXT <input id="mpHr2" type="number" min="0" step="10" value="0"></label>
-                        <label>Cuckaroo <input id="mpHr3" type="number" min="0" step="10" value="0"></label>
+            <!-- Top HUD -->
+            <div class="mp-hud">
+                <div class="mp-hud-cell">
+                    <span class="mp-hud-label">Room</span>
+                    <span class="mp-hud-value mp-code" id="mpRoomLabel">—</span>
+                </div>
+                <div class="mp-hud-cell">
+                    <span class="mp-hud-label">Status</span>
+                    <span id="mpRunning" class="mp-hud-value mp-status-lamp">PAUSED</span>
+                </div>
+                <div class="mp-hud-cell">
+                    <span class="mp-hud-label">Block</span>
+                    <span class="mp-hud-value mp-counter" id="mpHeight">0</span>
+                </div>
+                <div class="mp-hud-cell mp-hud-race">
+                    <span class="mp-hud-label">Race to <strong id="mpGoalLabel">20</strong> · <span id="mpRaceLead">—</span></span>
+                    <div class="mp-race-bar"><div id="mpRaceFill" class="mp-race-fill"></div></div>
+                </div>
+                <div class="mp-hud-cell mp-hud-actions">
+                    <button id="mpCopyLink" class="mp-arcade-btn small">Invite</button>
+                    <button id="mpLeave" class="mp-arcade-btn small danger">Quit</button>
+                </div>
+            </div>
+            <p class="mp-share-line">Invite link: <code id="mpShareLink"></code> <span class="mp-conn-line">· <span id="mpConnStatus2"></span></span></p>
+
+            <!-- Mining arena: 4 lanes -->
+            <div class="mp-arena" id="mpArena">
+                <div class="mp-arena-lane" data-algo="0" style="--lane:#ff4d5e">
+                    <div class="mp-lane-head">RandomXM</div>
+                    <div class="mp-lane-blocks" id="mpLaneBlocks0"></div>
+                    <div class="mp-lane-penalty" id="mpLanePenalty0" hidden>PENALTY</div>
+                    <div class="mp-lane-power"><div id="mpLanePower0"></div></div>
+                </div>
+                <div class="mp-arena-lane" data-algo="1" style="--lane:#37b6ff">
+                    <div class="mp-lane-head">Sha3x</div>
+                    <div class="mp-lane-blocks" id="mpLaneBlocks1"></div>
+                    <div class="mp-lane-penalty" id="mpLanePenalty1" hidden>PENALTY</div>
+                    <div class="mp-lane-power"><div id="mpLanePower1"></div></div>
+                </div>
+                <div class="mp-arena-lane" data-algo="2" style="--lane:#3dffa2">
+                    <div class="mp-lane-head">RandomXT</div>
+                    <div class="mp-lane-blocks" id="mpLaneBlocks2"></div>
+                    <div class="mp-lane-penalty" id="mpLanePenalty2" hidden>PENALTY</div>
+                    <div class="mp-lane-power"><div id="mpLanePower2"></div></div>
+                </div>
+                <div class="mp-arena-lane" data-algo="3" style="--lane:#ffb640">
+                    <div class="mp-lane-head">Cuckaroo</div>
+                    <div class="mp-lane-blocks" id="mpLaneBlocks3"></div>
+                    <div class="mp-lane-penalty" id="mpLanePenalty3" hidden>PENALTY</div>
+                    <div class="mp-lane-power"><div id="mpLanePower3"></div></div>
+                </div>
+            </div>
+
+            <div class="mp-deck">
+                <!-- Loadout console -->
+                <div class="mp-panel">
+                    <h3 class="mp-panel-title">Rig console</h3>
+                    <div class="mp-sliders">
+                        <label class="mp-slider" style="--lane:#ff4d5e">
+                            <span class="mp-slider-name">RandomXM <output id="mpHrVal0">0</output></span>
+                            <input id="mpHr0" type="range" min="0" max="300" step="10" value="0">
+                        </label>
+                        <label class="mp-slider" style="--lane:#37b6ff">
+                            <span class="mp-slider-name">Sha3x <output id="mpHrVal1">100</output></span>
+                            <input id="mpHr1" type="range" min="0" max="300" step="10" value="100">
+                        </label>
+                        <label class="mp-slider" style="--lane:#3dffa2">
+                            <span class="mp-slider-name">RandomXT <output id="mpHrVal2">0</output></span>
+                            <input id="mpHr2" type="range" min="0" max="300" step="10" value="0">
+                        </label>
+                        <label class="mp-slider" style="--lane:#ffb640">
+                            <span class="mp-slider-name">Cuckaroo <output id="mpHrVal3">0</output></span>
+                            <input id="mpHr3" type="range" min="0" max="300" step="10" value="0">
+                        </label>
                     </div>
-                    <div id="mpHostControls" class="mp-hr-inputs" style="margin-top:12px">
-                        <label><input id="mpPenalty" type="checkbox" checked> TIP-004 penalty</label>
-                        <label>Speedup <input id="mpSpeedup" type="number" min="1" max="600" value="60"></label>
-                        <label>LWMA window <input id="mpWindow" type="number" min="10" max="90" value="45"></label>
+                    <div id="mpHostControls" class="mp-host-grid">
+                        <label class="mp-check"><input id="mpPenalty" type="checkbox" checked> TIP-004 penalty</label>
+                        <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="60"></label>
+                        <label>Window <input id="mpWindow" type="number" min="10" max="90" value="45"></label>
+                        <label>Goal <input id="mpGoal" type="number" min="5" max="100" value="20"></label>
                     </div>
-                    <div class="mp-form-row" style="margin-top:12px">
-                        <button id="mpApplyHashrate" class="run-btn">Apply</button>
-                        <button id="mpStart" class="run-btn">Start</button>
-                        <button id="mpStop" class="run-btn rerandomize-btn">Pause</button>
-                        <button id="mpReset" class="run-btn rerandomize-btn">Reset chain</button>
+                    <div class="mp-deck-buttons">
+                        <button id="mpApplyHashrate" class="mp-arcade-btn">Lock in</button>
+                        <button id="mpStart" class="mp-arcade-btn primary">&#9654; Start</button>
+                        <button id="mpStop" class="mp-arcade-btn">Pause</button>
+                        <button id="mpReset" class="mp-arcade-btn danger">New round</button>
                     </div>
-                    <p class="dim">Host controls start/pause/reset/settings. Anyone can change their own hashrate.</p>
                 </div>
 
-                <div class="mp-card">
-                    <h3>Players</h3>
-                    <div id="mpPlayers"></div>
-                    <h3 style="margin-top:16px">Network totals</h3>
-                    <div id="mpTotals" class="mp-totals"></div>
+                <!-- High scores -->
+                <div class="mp-panel">
+                    <h3 class="mp-panel-title">High scores</h3>
+                    <div id="mpLeaderboard" class="mp-leaderboard"></div>
                     <div class="mp-live-stats">
-                        <div>Mean BT (recent): <strong id="mpStatMean">—</strong></div>
-                        <div>Algo split: <strong id="mpStatSplit">—</strong></div>
+                        <div>STREAK <strong id="mpMyStreak">0</strong></div>
+                        <div>MEAN BT <strong id="mpStatMean">—</strong></div>
+                        <div>MIX <strong id="mpStatSplit">—</strong></div>
                     </div>
                 </div>
-            </div>
 
-            <div class="mp-card" style="margin-top:16px">
-                <h3>Live block feed</h3>
-                <div id="mpBlockFeed" class="mp-block-feed"></div>
+                <!-- Kill feed -->
+                <div class="mp-panel">
+                    <h3 class="mp-panel-title">Feed</h3>
+                    <div id="mpBlockFeed" class="mp-block-feed"></div>
+                </div>
             </div>
         </div>
     </div>
