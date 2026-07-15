@@ -262,9 +262,19 @@ class Room {
     return { ok: true };
   }
 
-  continueToNext(playerId) {
+  nextChallenge(playerId) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
+    if (this.running) return { ok: false, error: 'A challenge is already running' };
     if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
+
+    // Complete the entire transition before any state is broadcast. The client
+    // sends one command and cannot observe an idle gap between reset and start.
+    this._removeBots();
+    this.challenge = null;
+    this.objective = null;
+    this.shadow = null;
+    this.lastResult = null;
+    this._resetScoresAndChain(true);
     return this.start(playerId);
   }
 

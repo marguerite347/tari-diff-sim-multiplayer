@@ -322,10 +322,11 @@ function handleMessage(ws, msg) {
       if (!result.ok) send(ws, { type: 'error', error: result.error });
       break;
     }
-    case 'continue': {
+    case 'continue':
+    case 'next_challenge': {
       const room = rooms.get(ws.roomCode);
       if (!room) return;
-      const result = room.continueToNext(ws.playerId);
+      const result = room.nextChallenge(ws.playerId);
       if (!result.ok) send(ws, { type: 'error', error: result.error });
       break;
     }

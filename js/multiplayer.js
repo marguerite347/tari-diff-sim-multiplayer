@@ -18,6 +18,7 @@ const Multiplayer = (function () {
   let toastTimer = null;
   let copilotAutoEngaged = false;
   let researchResetRequiresToken = false;
+  let nextChallengePending = false;
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -35,6 +36,7 @@ const Multiplayer = (function () {
     ws.addEventListener('open', () => setConnStatus('Connected'));
     ws.addEventListener('close', () => {
       setConnStatus('Disconnected — retrying…');
+      setNextChallengePending(false);
       ws = null;
       setTimeout(connect, 1200);
     });
@@ -46,8 +48,9 @@ const Multiplayer = (function () {
   }
 
   function send(msg) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify(msg));
+    return true;
   }
 
   function handleServerMessage(msg) {
@@ -63,6 +66,7 @@ const Multiplayer = (function () {
         break;
       case 'room_state':
         roomState = msg;
+        if (!msg.roundOver) setNextChallengePending(false);
         if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
         if (window.Battlefield && msg.shadow) Battlefield.setShadowCount(msg.shadow.count, msg.shadow.algo);
         render();
@@ -70,6 +74,7 @@ const Multiplayer = (function () {
         else hideVictory();
         break;
       case 'challenge_brief':
+        setNextChallengePending(false);
         if (roomState) {
           roomState.challenge = msg.challenge;
           roomState.running = true;
@@ -161,6 +166,7 @@ const Multiplayer = (function () {
         renderStatusLamp();
         break;
       case 'error':
+        setNextChallengePending(false);
         // A join against a room the server no longer knows (usually wiped by a
         // restart) should drop the stale ?room= link, not leave a zombie UI.
         if (!roomState && /room not found/i.test(msg.error || '')) {
@@ -224,10 +230,11 @@ const Multiplayer = (function () {
     });
     document.getElementById('mpVictoryDismiss')?.addEventListener('click', () => {
       const isHost = roomState?.hostId === roomState?.you;
-      hideVictory();
-      if (!isHost) return;
-      if (window.Battlefield) Battlefield.reset();
-      send({ type: 'continue' });
+      if (!isHost) {
+        hideVictory();
+        return;
+      }
+      if (send({ type: 'next_challenge' })) setNextChallengePending(true);
     });
     document.getElementById('mpResearchReset')?.addEventListener('click', openResearchReset);
     document.getElementById('mpResearchResetClose')?.addEventListener('click', closeResearchReset);
@@ -761,6 +768,7 @@ const Multiplayer = (function () {
     if (continueButton) {
       const isHost = roomState?.hostId === roomState?.you;
       continueButton.textContent = isHost ? 'CONTINUE TO NEXT CHALLENGE' : 'CLOSE RESULTS';
+      continueButton.disabled = isHost && nextChallengePending;
     }
     overlay.querySelector('.mp-confetti').style.display = success ? '' : 'none';
     overlay.hidden = false;
@@ -769,6 +777,14 @@ const Multiplayer = (function () {
   function hideVictory() {
     const overlay = document.getElementById('mpVictory');
     if (overlay) overlay.hidden = true;
+  }
+
+  function setNextChallengePending(pending) {
+    nextChallengePending = pending;
+    const button = document.getElementById('mpVictoryDismiss');
+    if (!button) return;
+    button.disabled = pending;
+    if (pending) button.textContent = 'STARTING NEXT CHALLENGE…';
   }
 
   async function loadResearch() {
@@ -891,11 +907,11 @@ const Multiplayer = (function () {
       const startButton = document.getElementById('mpStart');
       const stopButton = document.getElementById('mpStop');
       const resetButton = document.getElementById('mpReset');
-      const idle = !roomState.challenge && !roomState.roundOver;
-      const paused = !!roomState.challenge && !roomState.running && !roomState.roundOver;
+      const canStart = !roomState.running && !roomState.roundOver;
+      const paused = canStart && !!roomState.challenge;
       if (startButton) {
-        startButton.style.display = idle || paused ? '' : 'none';
-        startButton.disabled = !(idle || paused);
+        startButton.style.display = canStart ? '' : 'none';
+        startButton.disabled = !canStart;
         startButton.textContent = paused ? '▶ RESUME' : '▶ START CHALLENGE';
       }
       if (stopButton) {
