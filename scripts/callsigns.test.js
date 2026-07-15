@@ -46,6 +46,7 @@ test('room collisions are case-insensitive and readable', () => {
   assert.equal(room.players.get('one').name, 'Solar Guard');
   assert.equal(room.players.get('two').name, 'solar guard-2');
   assert.ok([...room.players.get('two').name].length <= 24);
+  manager.shutdown();
 });
 
 test('public listings respect privacy and contain safe metadata only', () => {
@@ -57,8 +58,9 @@ test('public listings respect privacy and contain safe metadata only', () => {
   let listings = manager.publicListings(32);
   assert.equal(listings.length, 1);
   assert.deepEqual(Object.keys(listings[0]).sort(), [
-    'capacity', 'challenge', 'code', 'createdAt', 'height', 'humans', 'joinable',
-    'lastActiveAt', 'progress', 'state', 'variant',
+    'capacity', 'challenge', 'code', 'connectedHumans', 'countdownDeadline',
+    'countdownKind', 'createdAt', 'height', 'humans', 'joinable', 'lastActiveAt',
+    'lifecycleMode', 'progress', 'remainingMs', 'state', 'variant',
   ]);
   assert.equal(JSON.stringify(listings).includes('PRIVATE PILOT'), false);
   assert.equal(room.publicListing(1).joinable, false);
@@ -70,4 +72,5 @@ test('public listings respect privacy and contain safe metadata only', () => {
   listings = manager.publicListings(32);
   assert.equal(listings[0].state, 'waiting');
   assert.equal(listings[0].humans, 1);
+  manager.shutdown();
 });

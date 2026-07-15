@@ -53,10 +53,10 @@
                 <p class="mp-title-kicker">Pilot briefing</p>
                 <h2 class="mp-victory-logo">HOW TO PLAY</h2>
                 <ol class="mp-tutorial-steps">
-                    <li><strong>Suit up.</strong> You get a generated callsign that you can edit, then create a new game or join with a friend&rsquo;s room code. The host starts the challenge and can pause, resume, or abandon an active round.</li>
+                    <li><strong>Suit up.</strong> You get a generated callsign that you can edit, then create or join a game. Listed public rooms auto-start after 10 seconds, accept live reinforcements, and begin the next challenge 5 seconds after results while anyone remains; private rooms are host-controlled.</li>
                     <li><strong>Read the mission HUD.</strong> Every round a scripted attacker messes with the network. Your objective stays at the top: keep block times stable, or keep any one algo below its share limit.</li>
                     <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
-                    <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and white helmet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
+                    <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and neon violet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
                     <li><strong>Or let the Copilot fly.</strong> Autopilot can play the round for you — it explains every move in its log and learns from past rounds.</li>
                     <li><strong>You&rsquo;re doing science.</strong> Each finished round records a datapoint comparing the status-quo network config vs the proposed one — see the research panel at the bottom.</li>
                 </ol>
@@ -127,7 +127,7 @@
                 <button id="mpJoin" class="mp-arcade-btn">Join game</button>
                 <button id="mpHelpLobby" class="mp-arcade-btn">? How to play</button>
             </div>
-            <p class="mp-listing-disclosure">NEW ROOMS APPEAR IN LIVE GAMES BY DEFAULT · HOSTS CAN SWITCH TO PRIVATE ANY TIME</p>
+            <p class="mp-listing-disclosure">PUBLIC ROOMS RUN CONTINUOUSLY · PRIVATE ROOMS ARE HOST-CONTROLLED · PRIVACY CAN CHANGE ONLY WHILE WAITING</p>
             <section class="mp-live-games" aria-labelledby="mpLiveGamesTitle">
                 <div class="mp-live-games-head">
                     <div>
@@ -154,6 +154,7 @@
                     <p id="mpVictoryVerdict" class="mp-victory-verdict" hidden></p>
                     <p id="mpVictorySub"></p>
                     <p><span id="mpResultAssignmentBadge" class="mp-assignment-badge"></span></p>
+                    <p id="mpVictoryCountdown" class="mp-lifecycle-countdown"></p>
                     <div id="mpVictoryStats" class="mp-result-stats"></div>
                     <div class="mp-result-actions">
                         <button id="mpVictoryDismiss" class="mp-arcade-btn primary">CONTINUE TO NEXT CHALLENGE</button>
@@ -220,10 +221,11 @@
                 </div>
             </div>
             <p class="mp-share-line">Invite link: <code id="mpShareLink"></code> <span class="mp-conn-line">· <span id="mpConnStatus2"></span></span></p>
+            <p id="mpLifecycleCountdown" class="mp-lifecycle-countdown" aria-live="polite"></p>
             <label class="mp-listing-control">
                 <input id="mpListed" type="checkbox" checked>
                 <span id="mpListedStatus">LISTED</span>
-                <small>Private hides this room from Live Games; the invite link still works.</small>
+                <small id="mpLifecycleNote">Public rooms start in 10s, accept live joins, and continue 5s after results. Private rooms use host controls; invite links always work.</small>
             </label>
 
             <!-- 3D battlefield arena -->
@@ -238,7 +240,7 @@
                     <span style="--lane:#37b6ff">Sha3x</span>
                     <span style="--lane:#3dffa2">RandomXT</span>
                     <span style="--lane:#ffb640">Cuckaroo</span>
-                    <span class="mp-bf-vocab" title="How to read the battlefield">army color = algo &middot; <em class="warning">black + warning horn</em> = attacker &middot; <em class="mine">white diamond</em> = you &middot; wall height = difficulty &middot; ghost blocks = hidden chain</span>
+                    <span class="mp-bf-vocab" title="How to read the battlefield">army color = algo &middot; <em class="warning">black + warning horn</em> = attacker &middot; <em class="mine">violet diamond</em> = you &middot; wall height = difficulty &middot; ghost blocks = hidden chain</span>
                 </div>
                 <div class="mp-bf-hint">drag to orbit · scroll to zoom · double-click to auto-spin</div>
             </div>

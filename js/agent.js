@@ -234,6 +234,17 @@ const Copilot = (function () {
       api.log('Autopilot engaged. I will manage your rigs and explain every move here.', 'sys');
       if (state?.running) {
         base = null; // re-baseline mid-round from the next block
+        lastActHeight = Number(state.height || 0);
+        lastAttackKey = '';
+        llmGuidance = null;
+        llmTacticalCalls = 0;
+        lastField = null;
+        if (state.challenge?.id && state.challenge?.variantId) {
+          roundKey = `${state.challenge.id}::${state.challenge.variantId}`;
+          const choice = pickProfile(memoryFor(roundKey).entry);
+          profileId = choice.id;
+          profile = PROFILES[profileId];
+        }
         api.log('Joining a round already in progress — I need one block of telemetry to read the field, then I will act.', 'sys');
       }
     } else {

@@ -27,6 +27,7 @@ const Multiplayer = (function () {
   let experimentReturnFocus = null;
   let roomPollTimer = null;
   let roomRequestInFlight = false;
+  const liveJoinBriefedRooms = new Set();
 
   function randomInt(max) {
     if (window.crypto?.getRandomValues) {
@@ -112,10 +113,15 @@ const Multiplayer = (function () {
         break;
       case 'room_state':
         roomState = msg;
+        roomState.lifecycleReceivedAt = performance.now();
+        roomState.lifecycleRemainingAtReceipt = Number.isFinite(Number(msg.remainingMs))
+          ? Math.max(0, Number(msg.remainingMs))
+          : null;
         if (nextChallengePending && msg.running && !msg.roundOver) setNextChallengePending(false);
         if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
         if (window.Battlefield && msg.shadow) Battlefield.setShadowCount(msg.shadow.count, msg.shadow.algo);
         render();
+        maybeShowLiveJoinBrief(msg);
         if (msg.roundOver && msg.lastResult) showResult(msg.lastResult);
         else hideVictory();
         break;
@@ -347,7 +353,16 @@ const Multiplayer = (function () {
 
       const challenge = document.createElement('p');
       challenge.className = 'mp-live-challenge';
-      challenge.textContent = String(room.challenge?.name || 'Awaiting challenge');
+      const blocksLeft = Math.max(
+        0,
+        (Number(room.progress?.durationBlocks) || 0) - (Number(room.progress?.currentBlock) || 0)
+      );
+      const countdown = room.countdownKind === 'lobby'
+        ? `STARTS IN ${formatDuration(room.remainingMs)}`
+        : (room.countdownKind === 'intermission'
+            ? `NEXT IN ${formatDuration(room.remainingMs)}`
+            : (room.state === 'live' ? `${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'} LEFT` : ''));
+      challenge.textContent = countdown || String(room.challenge?.name || 'CONTINUOUS AUTO ROOM');
 
       const facts = document.createElement('p');
       facts.className = 'mp-live-facts';
@@ -359,7 +374,9 @@ const Multiplayer = (function () {
       const join = document.createElement('button');
       join.type = 'button';
       join.className = 'mp-arcade-btn small';
-      join.textContent = room.joinable === false ? 'FULL' : 'JOIN';
+      join.textContent = room.joinable === false
+        ? 'FULL'
+        : (room.state === 'live' ? 'JOIN LIVE' : (room.countdownKind === 'lobby' ? 'JOIN BEFORE START' : 'JOIN'));
       join.disabled = room.joinable === false;
       join.addEventListener('click', () => joinRoom(room.code));
 
@@ -493,6 +510,7 @@ const Multiplayer = (function () {
 
     initExperimentExplainer();
     initTutorial();
+    setInterval(updateLifecycleDisplay, 250);
     connect();
     render();
     loadResearch();
@@ -615,7 +633,13 @@ const Multiplayer = (function () {
   function renderStatusLamp() {
     const el = document.getElementById('mpRunning');
     if (!el || !roomState) return;
-    if (roomState.roundOver) {
+    if (roomState.countdownKind === 'lobby') {
+      el.textContent = `STARTS ${formatDuration(lifecycleRemainingMs())}`;
+      el.className = 'mp-hud-value mp-status-lamp over';
+    } else if (roomState.countdownKind === 'intermission') {
+      el.textContent = `NEXT ${formatDuration(lifecycleRemainingMs())}`;
+      el.className = 'mp-hud-value mp-status-lamp over';
+    } else if (roomState.roundOver) {
       el.textContent = 'ROUND OVER';
       el.className = 'mp-hud-value mp-status-lamp over';
     } else if (roomState.running) {
@@ -992,10 +1016,19 @@ const Multiplayer = (function () {
     const setupButton = document.getElementById('mpVictorySetup');
     if (!button) return;
     const isHost = roomState?.hostId === roomState?.you;
+    const autoManaged = roomState?.lifecycleMode === 'auto';
     if (setupButton) {
-      setupButton.hidden = !isHost;
+      setupButton.hidden = !isHost || autoManaged;
       setupButton.disabled = nextChallengePending;
     }
+    button.hidden = autoManaged && !isHost;
+    if (autoManaged) {
+      button.textContent = nextChallengePending ? 'STARTING NEXT CHALLENGE…' : 'START NEXT NOW';
+      button.disabled = nextChallengePending;
+      updateLifecycleDisplay();
+      return;
+    }
+    button.hidden = false;
     if (!isHost) {
       button.textContent = 'WAITING FOR HOST';
       button.disabled = true;
@@ -1154,6 +1187,7 @@ const Multiplayer = (function () {
     engageCopilotByDefault();
 
     const isHost = roomState.hostId === roomState.you;
+    const autoManaged = roomState.lifecycleMode === 'auto';
     document.getElementById('mpRoomLabel').textContent = roomState.room;
     const debugLink = document.getElementById('mpDebugLink');
     if (debugLink) debugLink.href = `/api/debug/${roomState.room}`;
@@ -1167,7 +1201,7 @@ const Multiplayer = (function () {
     const variantMode = document.getElementById('mpVariantMode');
     if (variantMode) {
       if (document.activeElement !== variantMode) variantMode.value = roomState.variantMode || 'random';
-      variantMode.disabled = !isHost || roomState.running || !!roomState.challenge;
+      variantMode.disabled = !isHost || roomState.running || !!roomState.challenge || !!roomState.countdownKind;
       variantMode.title = !isHost
         ? 'Only the host can select the network variant'
         : (variantMode.disabled ? 'Locked while a challenge is armed' : 'Select randomized research or a manual exploratory variant');
@@ -1176,9 +1210,9 @@ const Multiplayer = (function () {
     const listedStatus = document.getElementById('mpListedStatus');
     if (listedInput) {
       listedInput.checked = roomState.listed !== false;
-      listedInput.disabled = !isHost;
+      listedInput.disabled = !isHost || roomState.running || !!roomState.challenge || roomState.roundOver;
       listedInput.title = isHost
-        ? 'Hide or show this room in Live Games'
+        ? (listedInput.disabled ? 'Privacy locks once a challenge is armed' : 'Switch between continuous public and host-controlled private play')
         : 'Only the host can change room discovery';
     }
     if (listedStatus) listedStatus.textContent = roomState.listed === false ? 'PRIVATE' : 'LISTED';
@@ -1189,19 +1223,22 @@ const Multiplayer = (function () {
       const canStart = !roomState.running && !nextChallengePending;
       const paused = canStart && !!roomState.challenge && !roomState.roundOver;
       if (startButton) {
-        startButton.style.display = canStart ? '' : 'none';
+        const canStartNow = autoManaged
+          ? canStart && (roomState.countdownKind === 'lobby' || roomState.countdownKind === 'intermission')
+          : canStart;
+        startButton.style.display = canStartNow ? '' : 'none';
         startButton.disabled = !canStart;
-        startButton.textContent = roomState.roundOver
-          ? '▶ START NEXT CHALLENGE'
-          : (paused ? '▶ RESUME' : '▶ START CHALLENGE');
+        startButton.textContent = autoManaged
+          ? (roomState.countdownKind === 'intermission' ? '▶ START NEXT NOW' : '▶ START NOW')
+          : (roomState.roundOver ? '▶ START NEXT CHALLENGE' : (paused ? '▶ RESUME' : '▶ START CHALLENGE'));
       }
       if (stopButton) {
-        stopButton.style.display = roomState.running ? '' : 'none';
+        stopButton.style.display = !autoManaged && roomState.running ? '' : 'none';
         stopButton.disabled = !roomState.running;
         stopButton.textContent = 'PAUSE';
       }
       if (resetButton) {
-        resetButton.style.display = roomState.challenge && !roomState.roundOver ? '' : 'none';
+        resetButton.style.display = !autoManaged && roomState.challenge && !roomState.roundOver ? '' : 'none';
         resetButton.disabled = !roomState.challenge || roomState.roundOver;
         resetButton.textContent = 'ABANDON ROUND';
       }
@@ -1228,10 +1265,11 @@ const Multiplayer = (function () {
 
     const feed = document.getElementById('mpBlockFeed');
     feed.innerHTML = (roomState.recentBlocks || []).slice().reverse().map(blockCard).join('') ||
-      '<div class="dim mp-feed-empty">Waiting for kickoff — host hits Start.</div>';
+      `<div class="dim mp-feed-empty">${autoManaged ? 'PUBLIC ROOM IS CONTINUOUS · SERVER AUTO-STARTS' : 'WAITING FOR HOST TO START'}</div>`;
 
     history.replaceState({}, '', `/?room=${roomState.room}`);
     updateLiveStats();
+    updateLifecycleDisplay();
   }
 
   function renderLeaderboard() {
@@ -1276,7 +1314,9 @@ const Multiplayer = (function () {
       fill.style.width = `${Math.min(100, Math.round((roomState.height / roomState.challenge.durationBlocks) * 100))}%`;
       fill.classList.remove('bad');
     } else {
-      lead.textContent = 'Waiting for a challenge — host hits Start';
+      lead.textContent = roomState.lifecycleMode === 'auto'
+        ? lifecycleCopy()
+        : 'WAITING FOR A CHALLENGE — HOST STARTS';
       fill.style.width = '0%';
       fill.classList.remove('bad');
     }
@@ -1331,6 +1371,62 @@ const Multiplayer = (function () {
   function shortName(name) {
     if (!name) return 'net';
     return name.length > 8 ? `${name.slice(0, 7)}…` : name;
+  }
+
+  function lifecycleRemainingMs() {
+    if (!roomState || roomState.lifecycleRemainingAtReceipt === null) return null;
+    return Math.max(0, roomState.lifecycleRemainingAtReceipt - (performance.now() - roomState.lifecycleReceivedAt));
+  }
+
+  function maybeShowLiveJoinBrief(state) {
+    if (!state?.room || !state.running || !state.challenge || state.height <= 0) return;
+    if (liveJoinBriefedRooms.has(state.room)) return;
+    liveJoinBriefedRooms.add(state.room);
+    const blocksLeft = Math.max(0, Number(state.challenge.durationBlocks || 0) - Number(state.height || 0));
+    const message = `JOINING LIVE · BLOCK ${state.height} · ${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'} LEFT`;
+    showBattlefieldEvent(message, false, 4200);
+    showToast(message, 'good');
+    ticker(message, 'sys');
+  }
+
+  function formatDuration(milliseconds) {
+    const totalSeconds = Math.max(0, Math.ceil((Number(milliseconds) || 0) / 1000));
+    return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`;
+  }
+
+  function lifecycleCopy() {
+    if (!roomState) return '';
+    if (roomState.countdownKind === 'lobby') {
+      const humans = Number(roomState.connectedHumans) || 0;
+      return `GAME STARTS IN ${formatDuration(lifecycleRemainingMs())} · ${humans} PLAYER${humans === 1 ? '' : 'S'} READY`;
+    }
+    if (roomState.countdownKind === 'intermission') {
+      return `NEXT CHALLENGE IN ${formatDuration(lifecycleRemainingMs())}`;
+    }
+    if (roomState.lifecycleMode === 'auto' && roomState.running && roomState.challenge) {
+      const blocksLeft = Math.max(
+        0,
+        (Number(roomState.challenge.durationBlocks) || 0) - (Number(roomState.height) || 0)
+      );
+      return `ROUND ENDS IN ${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'}`;
+    }
+    return roomState.lifecycleMode === 'auto'
+      ? 'PUBLIC ROOM · CONTINUOUS · SERVER AUTO-MANAGED'
+      : 'PRIVATE ROOM · HOST-CONTROLLED';
+  }
+
+  function updateLifecycleDisplay() {
+    if (!roomState) return;
+    const copy = lifecycleCopy();
+    const banner = document.getElementById('mpLifecycleCountdown');
+    if (banner) banner.textContent = copy;
+    const resultCountdown = document.getElementById('mpVictoryCountdown');
+    if (resultCountdown) {
+      resultCountdown.textContent = roomState.roundOver && roomState.lifecycleMode === 'auto' ? copy : '';
+    }
+    const lead = document.getElementById('mpRaceLead');
+    if (lead && !roomState.challenge && roomState.lifecycleMode === 'auto') lead.textContent = copy;
+    renderStatusLamp();
   }
 
   function escapeHtml(str) {

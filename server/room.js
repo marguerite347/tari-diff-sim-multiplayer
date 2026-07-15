@@ -25,8 +25,16 @@ const DEFAULT_HASHRATE = 100;
 const DEFAULT_GOAL = 20;
 const POINTS_PER_BLOCK = 100;
 const STREAK_BONUS = 25;
+const PUBLIC_LOBBY_COUNTDOWN_MS = envDuration('PUBLIC_LOBBY_COUNTDOWN_MS', 10_000);
+const PUBLIC_INTERMISSION_MS = envDuration('PUBLIC_INTERMISSION_MS', 5_000);
+const PUBLIC_EMPTY_GRACE_MS = envDuration('PUBLIC_EMPTY_GRACE_MS', 120_000);
 // Separates this calibrated, textured simulation from legacy research rows.
 const SIMULATION_VERSION = 'mainnet-texture-v2';
+
+function envDuration(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : fallback;
+}
 
 function sanitizePlayerName(name) {
   const normalized = String(name ?? '').normalize('NFKC')
@@ -67,7 +75,7 @@ function createPlayer(id, name, isBot = false, kind = null) {
 }
 
 class Room {
-  constructor(code, hostId) {
+  constructor(code, hostId, onEmptyExpired = null) {
     this.code = code;
     this.hostId = hostId;
     this.players = new Map();
@@ -87,7 +95,14 @@ class Room {
     this.running = false;
     this.roundOver = false;
     this.winnerId = null;
-    this.timer = null;
+    this.blockTimer = null;
+    this.lifecycleTimer = null;
+    this.lifecycleKind = null;
+    this.lifecycleDeadline = null;
+    this._lifecycleGeneration = 0;
+    this.emptyRoomTimer = null;
+    this.emptyRoomDeadline = null;
+    this.onEmptyExpired = onEmptyExpired;
     this.rng = mulberry32((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
     this.createdAt = Date.now();
     this.lastActiveAt = this.createdAt;
@@ -99,6 +114,7 @@ class Room {
   }
 
   addClient(playerId, ws, name) {
+    this._clearEmptyRoomTimer();
     let player = this.players.get(playerId);
     const requestedName = sanitizePlayerName(name);
     const defaultRequested = requestedName.toLowerCase() === 'miner';
@@ -117,6 +133,7 @@ class Room {
     // disconnected, or missing.
     const currentHost = this.hostId ? this.players.get(this.hostId) : null;
     if (!currentHost || currentHost.isBot || !currentHost.connected) this.hostId = playerId;
+    this.reconcileLifecycle();
     return player;
   }
 
@@ -163,7 +180,12 @@ class Room {
       this.hostId = nextHost ? nextHost.id : null;
     }
 
-    if (this.clients.size === 0) this.stop();
+    if (this.connectedHumanCount() === 0) {
+      if (this.listed) this._handlePublicRoomEmpty();
+      else this.stop();
+    } else {
+      this.reconcileLifecycle();
+    }
   }
 
   setHashrates(playerId, hashrates) {
@@ -178,14 +200,20 @@ class Room {
 
   setSettings(playerId, settings = {}) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can change settings' };
-    if (typeof settings.listed === 'boolean') this.listed = settings.listed;
+    if (typeof settings.listed === 'boolean' && settings.listed !== this.listed) {
+      if (this.running || this.challenge || this.roundOver || this.lifecycleKind === 'intermission') {
+        return { ok: false, error: 'Room privacy can only change while waiting for a challenge' };
+      }
+      this.listed = settings.listed;
+      this.reconcileLifecycle();
+    }
     if (settings.variantMode !== undefined) {
       const variantMode = String(settings.variantMode);
       if (!['random', 'lwma90', 'lwma45_tip004'].includes(variantMode)) {
         return { ok: false, error: 'Unknown network variant mode' };
       }
-      if (this.running || this.challenge) {
-        return { ok: false, error: 'Network variant can only change between challenges' };
+      if (this.running || this.challenge || this.lifecycleKind) {
+        return { ok: false, error: 'Network variant locks when a public countdown begins' };
       }
       this.variantMode = variantMode;
     }
@@ -260,8 +288,22 @@ class Room {
     return 'waiting';
   }
 
+  connectedHumanCount() {
+    return [...this.players.values()].filter((player) => player.connected && !player.isBot).length;
+  }
+
+  lifecycleState(now = Date.now()) {
+    return {
+      lifecycleMode: this.listed ? 'auto' : 'hosted',
+      countdownKind: this.lifecycleKind,
+      countdownDeadline: this.lifecycleDeadline,
+      remainingMs: this.lifecycleDeadline === null ? null : Math.max(0, this.lifecycleDeadline - now),
+      connectedHumans: this.connectedHumanCount(),
+    };
+  }
+
   publicListing(capacity) {
-    const humans = [...this.players.values()].filter((player) => player.connected && !player.isBot).length;
+    const humans = this.connectedHumanCount();
     const challenge = publicChallenge(this.challenge);
     return {
       code: this.code,
@@ -283,6 +325,7 @@ class Room {
       },
       createdAt: new Date(this.createdAt).toISOString(),
       lastActiveAt: new Date(this.lastActiveAt).toISOString(),
+      ...this.lifecycleState(),
     };
   }
 
@@ -314,6 +357,7 @@ class Room {
         ? { count: this.shadow.count, algo: this.shadow.algo }
         : null,
       lastResult: this.lastResult,
+      ...this.lifecycleState(),
     };
   }
 
@@ -334,12 +378,43 @@ class Room {
   start(playerId) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can start' };
     if (this.running) return { ok: true };
-
-    if (this.roundOver) {
-      this._removeBots();
-      this.challenge = null;
-      this._resetScoresAndChain(true);
+    if (this.listed && this.connectedHumanCount() === 0) {
+      return { ok: false, error: 'At least one connected player is required' };
     }
+
+    return this.roundOver ? this._nextChallengeAtomic() : this._startChallengeAtomic();
+  }
+
+  nextChallenge(playerId) {
+    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
+    if (this.listed && this.running) return { ok: true };
+    if (this.running) return { ok: false, error: 'A challenge is already running' };
+    if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
+
+    return this._nextChallengeAtomic();
+  }
+
+  _nextChallengeAtomic() {
+    if (this.running) return { ok: false, error: 'A challenge is already running' };
+    if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
+    if (this.listed && this.connectedHumanCount() === 0) {
+      return { ok: false, error: 'At least one connected player is required' };
+    }
+    this._clearLifecycleTimer();
+    // Complete the entire transition before any state is broadcast. Clients
+    // cannot observe an idle gap between reset and start.
+    this._removeBots();
+    this.challenge = null;
+    this.objective = null;
+    this.shadow = null;
+    this.lastResult = null;
+    this._resetScoresAndChain(true);
+    return this._startChallengeAtomic();
+  }
+
+  _startChallengeAtomic() {
+    if (this.running) return { ok: true };
+    this._clearLifecycleTimer();
     if (!this.challenge) this._armChallenge();
 
     this.running = true;
@@ -355,24 +430,9 @@ class Room {
     return { ok: true };
   }
 
-  nextChallenge(playerId) {
-    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
-    if (this.running) return { ok: false, error: 'A challenge is already running' };
-    if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
-
-    // Complete the entire transition before any state is broadcast. The client
-    // sends one command and cannot observe an idle gap between reset and start.
-    this._removeBots();
-    this.challenge = null;
-    this.objective = null;
-    this.shadow = null;
-    this.lastResult = null;
-    this._resetScoresAndChain(true);
-    return this.start(playerId);
-  }
-
   returnToSetup(playerId) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can return to setup' };
+    if (this.listed) return { ok: false, error: 'Public rooms continue automatically' };
     if (this.running) return { ok: false, error: 'A challenge is already running' };
     if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
     this._removeBots();
@@ -435,11 +495,10 @@ class Room {
 
   stop(playerId = null) {
     if (playerId && playerId !== this.hostId) return { ok: false, error: 'Only the host can stop' };
+    if (playerId && this.listed) return { ok: false, error: 'Public rounds cannot be paused' };
     this.running = false;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this._clearBlockTimer();
+    this._clearLifecycleTimer();
     this.broadcast({ type: 'status', message: 'Race paused', running: false });
     this.broadcastState();
     return { ok: true };
@@ -447,6 +506,7 @@ class Room {
 
   reset(playerId) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can reset' };
+    if (this.listed) return { ok: false, error: 'Public rounds cannot be abandoned' };
     this.roundOver = false;
     this.winnerId = null;
     this._removeBots();
@@ -484,10 +544,7 @@ class Room {
   finishChallenge() {
     this.running = false;
     this.roundOver = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this._clearBlockTimer();
 
     const result = this.objective.evaluate();
     const humans = [...this.players.values()].filter((p) => !p.isBot && p.connected);
@@ -517,6 +574,9 @@ class Room {
       ...result,
     });
 
+    if (this.listed && this.connectedHumanCount() > 0) {
+      this._beginLifecycleCountdown('intermission', PUBLIC_INTERMISSION_MS);
+    }
     this.broadcast({
       type: 'round_result',
       result: this.lastResult,
@@ -677,13 +737,13 @@ class Room {
 
   scheduleNext(delayMs = 200) {
     if (!this.running) return;
-    if (this.timer) clearTimeout(this.timer);
+    if (this.blockTimer) clearTimeout(this.blockTimer);
 
     // Debug breadcrumbs for /api/debug/:roomCode — a running room whose timer
     // fired long ago with nothing rearmed means the loop chain died.
     this._timerArmedAt = Date.now();
-    this.timer = setTimeout(() => {
-      this.timer = null;
+    this.blockTimer = setTimeout(() => {
+      this.blockTimer = null;
       if (!this.running) return;
 
       const block = mineOneBlock(this, this.players, this.rng);
@@ -720,6 +780,111 @@ class Room {
       this.scheduleNext(nextDelay);
     }, delayMs);
   }
+
+  reconcileLifecycle() {
+    if (!this.listed) {
+      this._clearLifecycleTimer();
+      return;
+    }
+    if (this.connectedHumanCount() === 0 || this.running) {
+      this._clearLifecycleTimer();
+      return;
+    }
+    if (this.roundOver) {
+      if (this.lifecycleKind !== 'intermission') {
+        this._beginLifecycleCountdown('intermission', PUBLIC_INTERMISSION_MS);
+      }
+      return;
+    }
+    if (!this.challenge) {
+      if (this.lifecycleKind !== 'lobby') {
+        this._beginLifecycleCountdown('lobby', PUBLIC_LOBBY_COUNTDOWN_MS);
+      }
+      return;
+    }
+    // Public rooms never remain host-paused.
+    this._resetPublicToWaiting();
+    this._beginLifecycleCountdown('lobby', PUBLIC_LOBBY_COUNTDOWN_MS);
+  }
+
+  _beginLifecycleCountdown(kind, durationMs) {
+    this._clearLifecycleTimer();
+    if (!this.listed || this.connectedHumanCount() === 0) return;
+    const generation = this._lifecycleGeneration;
+    this.lifecycleKind = kind;
+    this.lifecycleDeadline = Date.now() + durationMs;
+    this._lifecycleArmedAt = Date.now();
+    this.lifecycleTimer = setTimeout(() => {
+      this.lifecycleTimer = null;
+      if (generation !== this._lifecycleGeneration || this.lifecycleKind !== kind) return;
+      this.lifecycleKind = null;
+      this.lifecycleDeadline = null;
+      if (!this.listed || this.connectedHumanCount() === 0) return;
+      if (kind === 'lobby' && !this.running && !this.challenge && !this.roundOver) {
+        this._startChallengeAtomic();
+      } else if (kind === 'intermission' && !this.running && this.roundOver) {
+        this._nextChallengeAtomic();
+      }
+    }, durationMs);
+    this.broadcastState();
+  }
+
+  _clearLifecycleTimer() {
+    this._lifecycleGeneration += 1;
+    if (this.lifecycleTimer) clearTimeout(this.lifecycleTimer);
+    this.lifecycleTimer = null;
+    this.lifecycleKind = null;
+    this.lifecycleDeadline = null;
+  }
+
+  _clearBlockTimer() {
+    if (this.blockTimer) clearTimeout(this.blockTimer);
+    this.blockTimer = null;
+  }
+
+  _resetPublicToWaiting() {
+    this.running = false;
+    this.roundOver = false;
+    this._clearBlockTimer();
+    this._clearLifecycleTimer();
+    this._removeBots();
+    this.challenge = null;
+    this.objective = null;
+    this.shadow = null;
+    this.lastResult = null;
+    this._resetScoresAndChain(true);
+  }
+
+  _handlePublicRoomEmpty() {
+    const wasRoundOver = this.roundOver;
+    this._clearBlockTimer();
+    this._clearLifecycleTimer();
+    if (!wasRoundOver) this._resetPublicToWaiting();
+    this._clearEmptyRoomTimer();
+    this.emptyRoomDeadline = Date.now() + PUBLIC_EMPTY_GRACE_MS;
+    this.emptyRoomTimer = setTimeout(() => {
+      this.emptyRoomTimer = null;
+      this.emptyRoomDeadline = null;
+      if (this.connectedHumanCount() === 0 && this.onEmptyExpired) this.onEmptyExpired(this);
+    }, PUBLIC_EMPTY_GRACE_MS);
+  }
+
+  _clearEmptyRoomTimer() {
+    if (this.emptyRoomTimer) clearTimeout(this.emptyRoomTimer);
+    this.emptyRoomTimer = null;
+    this.emptyRoomDeadline = null;
+  }
+
+  destroy() {
+    this.running = false;
+    this._clearBlockTimer();
+    this._clearLifecycleTimer();
+    this._clearEmptyRoomTimer();
+    for (const ws of this.clients.values()) {
+      if (ws.readyState === 1 && typeof ws.close === 'function') ws.close(1001, 'Room closed');
+    }
+    this.clients.clear();
+  }
 }
 
 class RoomManager {
@@ -730,7 +895,11 @@ class RoomManager {
   create() {
     let code = randomCode();
     while (this.rooms.has(code)) code = randomCode();
-    const room = new Room(code, null);
+    const room = new Room(code, null, (expiredRoom) => {
+      if (this.rooms.get(code) !== expiredRoom) return;
+      expiredRoom.destroy();
+      this.rooms.delete(code);
+    });
     this.rooms.set(code, room);
     return room;
   }
@@ -750,12 +919,26 @@ class RoomManager {
   cleanupIdle(maxAgeMs = 1000 * 60 * 60 * 2) {
     const now = Date.now();
     for (const [code, room] of this.rooms.entries()) {
-      if (room.clients.size === 0 && now - room.createdAt > maxAgeMs) {
-        room.stop();
+      if (room.clients.size === 0 && !room.emptyRoomTimer && now - room.createdAt > maxAgeMs) {
+        room.destroy();
         this.rooms.delete(code);
       }
     }
   }
+
+  shutdown() {
+    for (const room of this.rooms.values()) room.destroy();
+    this.rooms.clear();
+  }
 }
 
-module.exports = { RoomManager, DEFAULT_HASHRATE, sanitizePlayerName, generateCallsign };
+module.exports = {
+  Room,
+  RoomManager,
+  DEFAULT_HASHRATE,
+  PUBLIC_LOBBY_COUNTDOWN_MS,
+  PUBLIC_INTERMISSION_MS,
+  PUBLIC_EMPTY_GRACE_MS,
+  sanitizePlayerName,
+  generateCallsign,
+};

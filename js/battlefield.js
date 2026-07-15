@@ -59,10 +59,11 @@ const Battlefield = (function () {
   const MAX_ENEMY = 54;
   // Ownership is carried by shape and markers, never by a lane color:
   // attackers wear black armor with a pulsing warning horn; the local squad
-  // keeps its algo color and gains a bright white helmet diamond.
+  // keeps its algo color and gains a neon violet diamond with a dark backplate.
   const ENEMY_COLOR = 0x111318;
   const ENEMY_WARNING_COLOR = 0xff2030;
-  const MINE_MARKER_COLOR = 0xffffff;
+  const MINE_MARKER_COLOR = 0xe64cff;
+  const MINE_MARKER_BACKPLATE = 0x05020a;
   const ENEMY_SCALE = 1.35;
 
   // cadence weather: heat > 0 = blocks running hot, stall grows while no block lands
@@ -281,11 +282,44 @@ const Battlefield = (function () {
     mesh.count = 0;
     scene.add(mesh);
 
-    const mineMarker = new THREE.InstancedMesh(
-      new THREE.OctahedronGeometry(0.34, 0),
-      new THREE.MeshBasicMaterial({ color: MINE_MARKER_COLOR }),
+    const mineMarkerHalo = new THREE.InstancedMesh(
+      new THREE.OctahedronGeometry(0.82, 0),
+      new THREE.MeshBasicMaterial({
+        color: MINE_MARKER_COLOR,
+        transparent: true,
+        opacity: 0.22,
+        depthTest: false,
+        depthWrite: false,
+      }),
       MAX_UNITS
     );
+    mineMarkerHalo.renderOrder = 20;
+    mineMarkerHalo.count = 0;
+    scene.add(mineMarkerHalo);
+
+    const mineMarkerBackplate = new THREE.InstancedMesh(
+      new THREE.OctahedronGeometry(0.64, 0),
+      new THREE.MeshBasicMaterial({
+        color: MINE_MARKER_BACKPLATE,
+        depthTest: false,
+        depthWrite: false,
+      }),
+      MAX_UNITS
+    );
+    mineMarkerBackplate.renderOrder = 21;
+    mineMarkerBackplate.count = 0;
+    scene.add(mineMarkerBackplate);
+
+    const mineMarker = new THREE.InstancedMesh(
+      new THREE.OctahedronGeometry(0.4, 0),
+      new THREE.MeshBasicMaterial({
+        color: MINE_MARKER_COLOR,
+        depthTest: false,
+        depthWrite: false,
+      }),
+      MAX_UNITS
+    );
+    mineMarker.renderOrder = 22;
     mineMarker.count = 0;
     scene.add(mineMarker);
 
@@ -334,7 +368,16 @@ const Battlefield = (function () {
     flag.position.set(cx * 1.25 + 1.3, 6.2, cz * 1.25);
     scene.add(flag);
 
-    armies[algo] = { mesh, mineMarker, count: 0, mineCount: 0, basePositions, charge: 0 };
+    armies[algo] = {
+      mesh,
+      mineMarker,
+      mineMarkerBackplate,
+      mineMarkerHalo,
+      count: 0,
+      mineCount: 0,
+      basePositions,
+      charge: 0,
+    };
     buildBanner(algo, cx, cz);
   }
 
@@ -483,7 +526,7 @@ const Battlefield = (function () {
   /**
    * Per-lane power split { hostile, mine, other } from the leaderboard.
    * Friendly army size = mine+other; enemy formation size = hostile. All
-   * defenders keep the lane color; white helmet diamonds identify your squad.
+   * defenders keep the lane color; violet diamonds identify your squad.
    */
   function setForces(perLane) {
     if (!started || !Array.isArray(perLane)) return;
@@ -507,6 +550,8 @@ const Battlefield = (function () {
         if (army.mesh.instanceColor) army.mesh.instanceColor.needsUpdate = true;
       }
       army.mineMarker.count = army.mineCount;
+      army.mineMarkerBackplate.count = army.mineCount;
+      army.mineMarkerHalo.count = army.mineCount;
       army.mesh.instanceMatrix.needsUpdate = true;
 
       // hostile invaders
@@ -971,12 +1016,18 @@ const Battlefield = (function () {
           dummy.rotation.y += Math.PI / 4;
           dummy.scale.set(markerPulse, markerPulse, markerPulse);
           dummy.updateMatrix();
+          army.mineMarkerHalo.setMatrixAt(i, dummy.matrix);
+          army.mineMarkerBackplate.setMatrixAt(i, dummy.matrix);
           army.mineMarker.setMatrixAt(i, dummy.matrix);
           dummy.scale.set(1, 1, 1);
         }
       }
       army.mesh.instanceMatrix.needsUpdate = true;
-      if (army.mineCount > 0) army.mineMarker.instanceMatrix.needsUpdate = true;
+      if (army.mineCount > 0) {
+        army.mineMarkerHalo.instanceMatrix.needsUpdate = true;
+        army.mineMarkerBackplate.instanceMatrix.needsUpdate = true;
+        army.mineMarker.instanceMatrix.needsUpdate = true;
+      }
     }
 
     // flying blocks: arc over the lane wall (arc height/speed set at launch)

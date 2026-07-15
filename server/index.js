@@ -188,6 +188,8 @@ app.get('/api/debug/:roomCode', (req, res) => {
     roomCode: room.code,
     running: room.running,
     roundOver: room.roundOver,
+    listed: room.listed,
+    ...room.lifecycleState(now),
     variantMode: room.variantMode,
     winnerId: room.winnerId,
     height: room.height,
@@ -223,11 +225,23 @@ app.get('/api/debug/:roomCode', (req, res) => {
       blockTime: b.blockTime,
       difficulty: b.difficulty,
     })),
-    timer: {
-      scheduled: !!room.timer,
-      armedAt: room._timerArmedAt ? new Date(room._timerArmedAt).toISOString() : null,
-      lastBlockAt: room._lastBlockAt ? new Date(room._lastBlockAt).toISOString() : null,
-      msSinceLastBlock: room._lastBlockAt ? now - room._lastBlockAt : null,
+    timers: {
+      block: {
+        scheduled: !!room.blockTimer,
+        armedAt: room._timerArmedAt ? new Date(room._timerArmedAt).toISOString() : null,
+        lastBlockAt: room._lastBlockAt ? new Date(room._lastBlockAt).toISOString() : null,
+        msSinceLastBlock: room._lastBlockAt ? now - room._lastBlockAt : null,
+      },
+      lifecycle: {
+        scheduled: !!room.lifecycleTimer,
+        kind: room.lifecycleKind,
+        deadline: room.lifecycleDeadline,
+        armedAt: room._lifecycleArmedAt ? new Date(room._lifecycleArmedAt).toISOString() : null,
+      },
+      emptyRoomGrace: {
+        scheduled: !!room.emptyRoomTimer,
+        deadline: room.emptyRoomDeadline,
+      },
     },
     server: serverInfo,
   });
@@ -440,3 +454,14 @@ server.listen(PORT, () => {
   console.log(`Tari multiplayer sim listening on http://localhost:${PORT}`);
   console.log(`Share a room with /?room=CODE after creating one`);
 });
+
+function shutdown(signal) {
+  console.log(`${signal} received; shutting down`);
+  rooms.shutdown();
+  wss.close();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));

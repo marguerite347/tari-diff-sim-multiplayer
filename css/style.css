@@ -661,6 +661,21 @@ body.game-view .sim-only { display: none; }
     font-size: 13px;
     font-weight: 600;
 }
+.mp-lifecycle-countdown {
+    min-height: 18px;
+    margin: 8px 20px 12px;
+    color: var(--arc-cyan);
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    line-height: 1.6;
+    text-align: center;
+    text-shadow: 0 0 12px rgba(55, 182, 255, 0.45);
+}
+.mp-lifecycle-countdown:empty { display: none; }
+.mp-victory-card .mp-lifecycle-countdown {
+    margin: 10px 0 4px;
+    color: var(--arc-neon);
+}
 
 @media (max-width: 650px) {
     .mp-title-screen { padding-inline: 12px; }
@@ -1172,7 +1187,7 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
 }
 .mp-bf-vocab em { font-style: normal; }
 .mp-bf-vocab em.warning { color: #ff8d99; }
-.mp-bf-vocab em.mine { color: #ffffff; }
+.mp-bf-vocab em.mine { color: #e64cff; }
 .mp-bf-hint {
     position: absolute;
     right: 12px;
@@ -1185,6 +1200,25 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     padding: 4px 10px;
     border-radius: 999px;
     pointer-events: none;
+}
+@media (max-width: 650px) {
+    .mp-bf-legend {
+        left: 6px;
+        right: 6px;
+        bottom: 6px;
+        gap: 3px;
+        flex-wrap: wrap;
+    }
+    .mp-bf-legend span {
+        flex: 0 0 auto;
+        padding: 3px 4px 2px;
+        font-size: 5px;
+    }
+    .mp-bf-legend .mp-bf-vocab {
+        flex-basis: 100%;
+        line-height: 1.45;
+    }
+    .mp-bf-hint { display: none; }
 }
 
 /* --- Story ticker: plain-language event narration over the battlefield --- */
