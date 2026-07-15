@@ -1,13 +1,34 @@
 # Tari Diff Sim — Block Race
 
-Fork of [m4r1m0/tari-diff-sim](https://github.com/m4r1m0/tari-diff-sim) turned into a **community research game**: shareable multiplayer rooms where every round is a random network challenge, and every finished round becomes a datapoint comparing candidate Tari network changes against the status quo.
+Fork of [m4r1m0/tari-diff-sim](https://github.com/m4r1m0/tari-diff-sim) turned into a **centralized, multiplayer Monte Carlo research game**. In shareable rooms, community members take part in controlled network stress tests; every finished round becomes a datapoint comparing candidate Tari network changes against the status quo.
 
 Players join a room and allocate hashrate across Tari's four PoW algorithms on a 3D battlefield. Each round draws:
 
 - a random **challenge** ("level") — a scripted bot attack such as a hash flood, algo-hopping, or burst-mining whiplash, plus a no-attacker control round; and
 - a random **network variant** — status quo (LWMA-90, no penalty) or the proposed change (LWMA-45 + TIP-004 penalty).
 
-Players defend the chain with their sliders. The round is scored on objective metrics (rolling block-time stability, algo dominance), recorded to `data/rounds.jsonl`, and aggregated at `/api/research` — shown in-app as "Community research: status quo vs proposed" win rates per challenge.
+Players defend the chain with their sliders. The round is scored on objective metrics (rolling block-time stability, algo dominance), recorded to `data/rounds.jsonl`, and aggregated at `/api/research` — shown in-app as "Community research: status quo vs proposed" win rates per challenge. The visual game makes network behavior, attacks, proposals, and tradeoffs easier to see and discuss, including for people who do not specialize in consensus or mining algorithms.
+
+Try the public game at [tari-diff-sim-multiplayer-production.up.railway.app](https://tari-diff-sim-multiplayer-production.up.railway.app).
+
+## Research scope and limitations
+
+Block Race is a centralized simulation of Tari's multi-algorithm mining and difficulty dynamics. The server models competing hashrate across four PoW algorithms, an exact port of Tari's LWMA calculation, stochastic block discovery, scripted attacks, difficulty feedback, TIP-004 streak penalties, orphans, and selected reorg behavior. Seeded randomness and randomized network-variant assignment make repeated rounds useful for Monte Carlo comparisons, while human and Copilot decisions create varied, human-in-the-loop scenarios.
+
+The game can provide useful comparative evidence, such as "LWMA-45 + TIP-004 produced fewer dominance failures or shorter stalls than LWMA-90 under the same attacks." It can help identify promising proposals, failure modes, tradeoffs, and hypotheses worth testing more deeply.
+
+It cannot establish that a proposed change is safe for mainnet by itself. It does not run real Tari node processes, execute full consensus or networking code, reproduce a live peer-to-peer network, or certify a protocol implementation. Its attacks, latency assumptions, miner behavior, and objectives are deliberately controlled model inputs; results are simulation evidence, not a mainnet safety approval.
+
+For stronger validation, the next tier would run multiple real Tari node processes in an isolated test network, inject controlled hashrate, latency, and partition conditions, and compare those results against the game model. The game is best used to generate hypotheses and large numbers of community-driven scenarios for that deeper test harness. See the [validation roadmap](docs/validation-roadmap.md) for the current and proposed validation tiers.
+
+### Community participation
+
+The project is also a public learning and participation tool, not only a dataset generator. Community play turns difficult network concepts into visible scenarios, builds shared awareness of attacks and design tradeoffs, and gives non-specialists a practical way to discuss proposals.
+
+- [Open the public game](https://tari-diff-sim-multiplayer-production.up.railway.app), join a listed room, or share a room invite.
+- [Propose a controlled stress-test challenge](https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=challenge-proposal.yml).
+- [Propose a network candidate](https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=network-candidate.yml) for exploratory review and evidence gathering.
+- Follow the [contribution guide](CONTRIBUTING.md) when implementing or reviewing a proposal.
 
 ## Quick start (local)
 

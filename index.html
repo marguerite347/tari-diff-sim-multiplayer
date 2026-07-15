@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A centralized multiplayer Monte Carlo research game for exploring Tari mining attacks, difficulty dynamics, and candidate network changes.">
     <title>Tari Difficulty Algorithm Simulation</title>
     <link rel="icon" href="data:,">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -58,7 +59,8 @@
                     <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
                     <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and neon violet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
                     <li><strong>Or let the Copilot fly.</strong> Autopilot can play the round for you — it explains every move in its log and learns from past rounds.</li>
-                    <li><strong>You&rsquo;re doing science.</strong> Each finished round records a datapoint comparing the status-quo network config vs the proposed one — see the research panel at the bottom.</li>
+                    <li><strong>What this proves.</strong> Finished rounds provide comparative Monte Carlo evidence about how network configs behave under the same attacks. They do not prove a change is safe for mainnet or validate full-node consensus.</li>
+                    <li><strong>Community research.</strong> Your play turns difficult network behavior, attacks, and tradeoffs into visible scenarios that more people can explore together.</li>
                 </ol>
                 <section id="mpScoringHelp" class="mp-scoring-help" tabindex="-1" aria-labelledby="mpScoringTitle">
                     <h3 id="mpScoringTitle">HOW YOU WIN</h3>
@@ -94,10 +96,15 @@
                         <h3>WHY RANDOM</h3>
                         <p>Random A/B is the default and produces official comparative research. Random assignment lets completed rounds compare objective success, stability, mean block time, orphan count, deepest reorg, longest block wait, and difficulty swing under similar attacks.</p>
                     </section>
+                    <section>
+                        <h3>RESEARCH SCOPE</h3>
+                        <p>Monte Carlo evidence, not full-node consensus validation. Results compare modeled outcomes; they do not certify a change as safe for mainnet.</p>
+                    </section>
                     <p class="mp-experiment-note">Hosts may select Status Quo or Candidate between rounds for targeted exploration. Manually selected rounds are tagged exploratory and excluded from the official randomized aggregate. Window and penalty lock during a challenge; speed changes viewing pace only.</p>
                 </div>
                 <div class="mp-community-proposals">
                     <p>Challenges are community-designed stress tests; candidates are proposed network rule changes.</p>
+                    <a class="mp-candidate-link" href="https://github.com/marguerite347/tari-diff-sim-multiplayer#research-scope-and-limitations" target="_blank" rel="noopener">Read the research scope ↗</a>
                     <a class="mp-candidate-link" href="https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=challenge-proposal.yml" target="_blank" rel="noopener">Propose a challenge ↗</a>
                     <a class="mp-candidate-link" href="https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=network-candidate.yml" target="_blank" rel="noopener">Propose a network candidate ↗</a>
                 </div>
@@ -395,11 +402,12 @@
             <div class="mp-lab mp-research">
                 <div class="mp-panel mp-lab-panel">
                     <h3 class="mp-panel-title">Community research — status quo vs proposed</h3>
-                    <p class="mp-lab-hint">Every finished round is a datapoint. Win rate = how often players kept the network on target under each config.</p>
+                    <p class="mp-lab-hint">Community play generates comparative simulation evidence. Win rate = how often players kept the modeled network on target under each config.</p>
                     <button id="mpResearchReset" class="mp-arcade-btn danger mp-research-reset" hidden>RESET RESEARCH DATA</button>
                     <div id="mpResearch" class="mp-research-grid">
                         <div class="dim">No rounds recorded yet — finish a challenge to add the first datapoint.</div>
                     </div>
+                    <p class="mp-lab-hint">These results are Monte Carlo evidence, not a mainnet safety certification or full-node consensus validation.</p>
                 </div>
             </div>
         </div>

@@ -2,6 +2,8 @@
 
 Thanks for helping! This is a community **research game**: every finished round becomes a datapoint comparing Tari network configurations (`data/rounds.jsonl`, aggregated at `/api/research`). **The integrity of that data matters more than any feature** — changes that alter the simulation's behavior or the round-result schema affect everyone's collected results, so tread carefully there and call it out in your PR.
 
+Research results are comparative Monte Carlo simulation evidence, not proof that a candidate is safe for mainnet and not validation of full-node consensus behavior. Preserve that boundary in code, documentation, UI copy, issue discussions, and evidence summaries. Acceptance into a game research pool means a proposal is eligible for stronger follow-up testing; it is not protocol certification or mainnet approval. See [Research scope and limitations](README.md#research-scope-and-limitations).
+
 ## Where to start
 
 - **[AGENTS.md](AGENTS.md)** — project overview, architecture map, how to run and verify, simulation invariants, and code style. Written for AI coding agents but just as useful for humans. If you use Cursor, Claude Code, Codex, etc., point your agent at it.

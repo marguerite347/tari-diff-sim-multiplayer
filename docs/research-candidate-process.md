@@ -1,6 +1,6 @@
 # Network research candidate process
 
-Submitting a candidate starts a review; it does **not** automatically add the candidate to the official randomized research pool.
+Submitting a candidate starts a review; it does **not** automatically add the candidate to the official randomized research pool. Approval or randomized-pool inclusion means the candidate is eligible for comparative simulation research and deeper validation. It is not a finding that the change is safe for mainnet, full-node consensus validation, protocol certification, or mainnet approval.
 
 ## Lifecycle
 
@@ -10,7 +10,7 @@ Submitting a candidate starts a review; it does **not** automatically add the ca
 4. **Minimum evidence threshold** — before approval, provide reproducible baseline and candidate runs across every relevant challenge. The proposal must define its sample threshold; the default expectation is at least 30 completed rounds per challenge×variant cell from multiple seeds, with more required when results are noisy.
 5. **Maintainer approval** — maintainers review implementation, evidence, tradeoffs, and whether adding another randomized arm would dilute existing research.
 6. **Randomized-pool eligibility** — only an approved candidate with sufficient evidence may be separately promoted to `randomized`. Promotion requires maintainer approval and a reviewed code change; registry status alone never changes runtime behavior.
-7. **Decision and archive** — candidates become accepted/approved, rejected, or retired. IDs are immutable and never reused. Keep proposal links, review decisions, reproduction details, and summarized evidence in the registry/history even after retirement.
+7. **Decision and archive** — candidates become accepted/approved, rejected, or retired. An accepted/approved result identifies a candidate for deeper testing; it does not approve a mainnet change. IDs are immutable and never reused. Keep proposal links, review decisions, reproduction details, and summarized evidence in the registry/history even after retirement.
 
 ## Proposal requirements
 

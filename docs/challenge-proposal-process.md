@@ -1,6 +1,6 @@
 # Community challenge proposal process
 
-Challenges are community-designed stress tests; network candidates are proposed rule/configuration changes. A challenge proposal does not upload runtime code or automatically join the official challenge pool.
+Challenges are community-designed stress tests; network candidates are proposed rule/configuration changes. A challenge proposal does not upload runtime code or automatically join the official challenge pool. Acceptance means the scenario is eligible to produce comparative simulation evidence and inform deeper testing; it does not validate full-node consensus behavior, certify a network candidate, or approve a mainnet change.
 
 ## Lifecycle
 
@@ -9,7 +9,7 @@ Challenges are community-designed stress tests; network candidates are proposed 
 3. **Local exploratory test** — implement on a branch and exercise it with `FORCE_CHALLENGE=<id>`. No proposal content is loaded dynamically by the public app.
 4. **Balance validation across both builtin variants** — run many seeded rounds with `lwma90` and `lwma45_tip004`. Report ignored, purposeful human, and Copilot response outcomes.
 5. **Maintainer approval** — maintainers review evidence, gameplay value, confounding assumptions, and maintenance cost.
-6. **Challenge-pool inclusion** — a reviewed code change adds the factory to `CHALLENGE_FACTORIES`; inclusion is never triggered by an issue or registry file.
+6. **Challenge-pool inclusion** — a reviewed code change adds the factory to `CHALLENGE_FACTORIES`; inclusion is never triggered by an issue or registry file and is not a mainnet safety approval.
 7. **Retirement/versioning** — challenge IDs are immutable and never reused. Materially different mechanics require a new ID. Retired evidence and decisions remain archived so old research rows retain meaning.
 
 ## Required design details

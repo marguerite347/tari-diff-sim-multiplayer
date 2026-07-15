@@ -6,7 +6,7 @@ Guidance for AI coding agents contributing to this repo. Human-facing docs: [REA
 
 ## What this project is
 
-A community **research game**: a Node/Express + WebSocket multiplayer "network defense" game simulating Tari's multi-algorithm LWMA difficulty adjustment. Players join a shared room and allocate hashrate across four PoW algorithms on a 3D battlefield while scripted bot attacks (hash floods, algo-hopping, selfish mining, etc.) stress the chain. Each round randomly draws one of two network configurations — status quo (LWMA-90, no penalty) vs. proposed (LWMA-45 + TIP-004 penalty) — and the objective outcome is recorded as a research datapoint. The aggregate at `/api/research` compares how the two configs hold up under identical attacks. **The research data is the point; game features exist to generate it.**
+A **centralized, multiplayer Monte Carlo community research game**: a Node/Express + WebSocket "network defense" simulation of Tari's multi-algorithm LWMA difficulty adjustment. Players join a shared room and allocate hashrate across four PoW algorithms on a 3D battlefield while scripted bot attacks (hash floods, algo-hopping, selfish mining, etc.) stress the modeled chain. Each round randomly draws one of two network configurations — status quo (LWMA-90, no penalty) vs. proposed (LWMA-45 + TIP-004 penalty) — and the objective outcome is recorded as a research datapoint. The aggregate at `/api/research` compares how the two configs hold up under identical attacks. The project also makes network behavior, attacks, proposals, and tradeoffs visible to non-specialists so community participation builds awareness and shared understanding alongside the dataset.
 
 ## Architecture map
 
@@ -60,6 +60,7 @@ Open http://localhost:8787 → **Multiplayer** tab → **Create room** → **Sta
 6. **Research data schema stability.** The fields written by `recordRound` (in `Room.finishChallenge`) and consumed by `aggregate()` in `server/research.js` are a stable schema: `data/rounds.jsonl` is append-only and old lines must keep aggregating correctly. Add new fields freely; never rename, repurpose, or change the meaning of existing ones. Never reuse an existing challenge or variant `id`.
 7. **Network verdict and personal score are separate.** `ObjectiveTracker.evaluate()` alone decides whether the room defended the network. Player points, streaks, and MVP reward mined blocks but must never override or be presented as the round verdict.
 8. **Manual evidence is exploratory.** Manually selected variants must carry `assignmentMode: manual` and remain excluded from the official randomized aggregate. A community proposal enters the randomized pool only after the review and evidence process in `docs/research-candidate-process.md`.
+9. **Simulation evidence is not protocol certification.** Results may support comparative claims about modeled outcomes, but must never be presented as proof that a change is safe for mainnet or as full-node consensus validation. The current game does not run real Tari nodes or reproduce a live peer-to-peer network; accepted proposals are candidates for deeper testing, not mainnet approvals.
 
 ## Code style
 
