@@ -307,7 +307,6 @@ const Multiplayer = (function () {
     });
     document.getElementById('mpHelp')?.addEventListener('click', showTutorial);
     document.getElementById('mpHelpLobby')?.addEventListener('click', showTutorial);
-    document.getElementById('mpScoringButton')?.addEventListener('click', showScoringHelp);
 
     let seen = false;
     try { seen = localStorage.getItem(TUTORIAL_KEY) === '1'; } catch { /* storage unavailable */ }
@@ -317,15 +316,6 @@ const Multiplayer = (function () {
   function showTutorial() {
     const overlay = document.getElementById('mpTutorial');
     if (overlay) overlay.hidden = false;
-  }
-
-  function showScoringHelp() {
-    showTutorial();
-    requestAnimationFrame(() => {
-      const section = document.getElementById('mpScoringHelp');
-      section?.scrollIntoView({ block: 'center' });
-      section?.focus({ preventScroll: true });
-    });
   }
 
   function hideTutorial() {
