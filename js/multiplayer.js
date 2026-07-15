@@ -584,7 +584,7 @@ const Multiplayer = (function () {
   function renderCopilotToggle(on) {
     const btn = document.getElementById('mpCopilotToggle');
     if (!btn) return;
-    btn.textContent = `Autopilot: ${on ? 'ON' : 'OFF'}`;
+    btn.textContent = `Autopilot · ${on ? 'ON' : 'OFF'}`;
     btn.classList.toggle('primary', on);
   }
 

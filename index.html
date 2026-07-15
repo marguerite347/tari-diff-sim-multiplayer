@@ -291,10 +291,12 @@
                 <div class="mp-panel">
                     <h3 class="mp-panel-title">Copilot</h3>
                     <div class="mp-copilot-head">
-                        <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot: OFF</button>
-                        <button id="mpCopilotMemory" class="mp-arcade-btn small">Memory</button>
-                        <button id="mpLlmBrain" class="mp-arcade-btn small" aria-controls="mpLlmPanel" aria-expanded="false">Brain: HEURISTIC</button>
-                        <span class="mp-copilot-hint">The agent runs your rigs, explains every move, and learns from each postmortem.</span>
+                        <div class="mp-copilot-controls">
+                            <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot · OFF</button>
+                            <button id="mpCopilotMemory" class="mp-arcade-btn">View memory</button>
+                            <button id="mpLlmAdd" class="mp-arcade-btn mp-copilot-llm" aria-controls="mpLlmPanel" aria-expanded="false" aria-label="Add LLM; not configured">Add LLM</button>
+                        </div>
+                        <p class="mp-copilot-hint">Your Copilot runs the rigs, explains each move, and learns from postmortems.</p>
                     </div>
                     <div id="mpLlmPanel" class="mp-llm-panel" hidden>
                         <div class="mp-llm-title">LLM BRIDGE</div>

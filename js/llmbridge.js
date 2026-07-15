@@ -210,11 +210,18 @@ const LLMBridge = (function () {
 
   function el(id) { return document.getElementById(id); }
 
-  function renderBrainButton() {
-    const btn = el('mpLlmBrain');
+  function renderAddLlmButton() {
+    const btn = el('mpLlmAdd');
     if (!btn) return;
-    btn.textContent = `Brain: ${isActive() ? 'LLM' : 'HEURISTIC'}`;
-    btn.classList.toggle('primary', isActive());
+    const configured = isConfigured();
+    const active = isActive();
+    btn.textContent = 'Add LLM';
+    btn.classList.toggle('configured', configured);
+    btn.classList.toggle('active', active);
+    btn.setAttribute(
+      'aria-label',
+      `Add LLM; ${configured ? 'configured' : 'not configured'}; advisor ${active ? 'on' : 'off'}`
+    );
   }
 
   function renderEnabledButton() {
@@ -226,7 +233,7 @@ const LLMBridge = (function () {
 
   function setPanelOpen(open) {
     const panel = el('mpLlmPanel');
-    const btn = el('mpLlmBrain');
+    const btn = el('mpLlmAdd');
     if (panel) panel.hidden = !open;
     if (btn) btn.setAttribute('aria-expanded', String(open));
   }
@@ -364,7 +371,7 @@ const LLMBridge = (function () {
       saveSettings();
     }
 
-    el('mpLlmBrain')?.addEventListener('click', () => {
+    el('mpLlmAdd')?.addEventListener('click', () => {
       const panel = el('mpLlmPanel');
       setPanelOpen(panel?.hidden === true);
     });
@@ -377,12 +384,13 @@ const LLMBridge = (function () {
       saveSettings();
       fillForm();
       renderEnabledButton();
-      renderBrainButton();
+      renderAddLlmButton();
     });
     el('mpLlmBaseUrl')?.addEventListener('change', (e) => {
       settings.baseUrl = e.target.value.trim();
       saveSettings();
       renderBaseUrlValidity();
+      renderAddLlmButton();
       if (!e.target.checkValidity()) {
         uiLog?.(`LLM bridge: ${e.target.validationMessage}`, 'alert');
         e.target.reportValidity();
@@ -391,8 +399,16 @@ const LLMBridge = (function () {
     el('mpLlmBaseUrl')?.addEventListener('input', () => clearFieldError('mpLlmBaseUrl'));
     el('mpLlmModel')?.addEventListener('input', () => clearFieldError('mpLlmModel'));
     el('mpLlmKey')?.addEventListener('input', () => clearFieldError('mpLlmKey'));
-    el('mpLlmModel')?.addEventListener('change', (e) => { settings.model = e.target.value.trim(); saveSettings(); });
-    el('mpLlmKey')?.addEventListener('change', (e) => { settings.apiKey = e.target.value.trim(); saveSettings(); });
+    el('mpLlmModel')?.addEventListener('change', (e) => {
+      settings.model = e.target.value.trim();
+      saveSettings();
+      renderAddLlmButton();
+    });
+    el('mpLlmKey')?.addEventListener('change', (e) => {
+      settings.apiKey = e.target.value.trim();
+      saveSettings();
+      renderAddLlmButton();
+    });
     el('mpLlmRememberKey')?.addEventListener('change', (e) => {
       settings.rememberKey = e.target.checked;
       saveSettings();
@@ -420,7 +436,7 @@ const LLMBridge = (function () {
           settings.enabled = false;
           saveSettings();
           renderEnabledButton();
-          renderBrainButton();
+          renderAddLlmButton();
           showConfigurationIssue(issue);
           return;
         }
@@ -430,11 +446,11 @@ const LLMBridge = (function () {
       }
       saveSettings();
       renderEnabledButton();
-      renderBrainButton();
+      renderAddLlmButton();
       uiLog?.(
         settings.enabled
-          ? `[LLM] Brain switched to LLM (${settings.model} via ${PRESETS[settings.preset]?.label || 'custom'}). Heuristics stay on as the reflex layer; I consult the model at mission brief, major attack shifts, and the postmortem.`
-          : 'Brain switched to HEURISTIC — pure reflex agent, no LLM calls.',
+          ? `[LLM] Advisor enabled (${settings.model} via ${PRESETS[settings.preset]?.label || 'custom'}). I consult it at mission brief, major attack shifts, and the postmortem.`
+          : 'LLM advisor disabled — Copilot will continue without model calls.',
         settings.enabled ? 'llm' : 'sys'
       );
     });
@@ -442,13 +458,14 @@ const LLMBridge = (function () {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !el('mpLlmPanel')?.hidden) {
         setPanelOpen(false);
+        el('mpLlmAdd')?.focus();
         return;
       }
     });
 
     fillForm();
     renderEnabledButton();
-    renderBrainButton();
+    renderAddLlmButton();
     syncRepoContext();
   }
 
