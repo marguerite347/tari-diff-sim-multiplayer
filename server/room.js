@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const Callsigns = require('../js/callsigns');
 const {
   ALGO_IDS,
   ALGO_NAMES,
@@ -26,10 +27,6 @@ const POINTS_PER_BLOCK = 100;
 const STREAK_BONUS = 25;
 // Separates this calibrated, textured simulation from legacy research rows.
 const SIMULATION_VERSION = 'mainnet-texture-v2';
-const CALLSIGN_WORDS = [
-  'EMBER', 'ORBIT', 'BEACON', 'FORGE', 'NEXUS', 'QUARTZ', 'RELAY', 'SENTRY',
-  'SPARK', 'VECTOR', 'VAULT', 'PULSE', 'COMET', 'CIPHER', 'ANCHOR', 'TUNNEL',
-];
 
 function sanitizePlayerName(name) {
   const normalized = String(name ?? '').normalize('NFKC')
@@ -41,8 +38,7 @@ function sanitizePlayerName(name) {
 }
 
 function generateCallsign() {
-  const word = CALLSIGN_WORDS[crypto.randomInt(CALLSIGN_WORDS.length)];
-  return `MINER-${word}-${String(crypto.randomInt(100)).padStart(2, '0')}`;
+  return Callsigns.generate((max) => crypto.randomInt(max));
 }
 
 function randomCode(length = 5) {
@@ -94,6 +90,8 @@ class Room {
     this.timer = null;
     this.rng = mulberry32((Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0);
     this.createdAt = Date.now();
+    this.lastActiveAt = this.createdAt;
+    this.listed = true;
     this.challenge = null;
     this.objective = null;
     this.lastResult = null;
@@ -114,6 +112,7 @@ class Room {
       player.connected = true;
     }
     this.clients.set(playerId, ws);
+    this.lastActiveAt = Date.now();
     // A rejoining human reclaims the host seat if the current host is a bot,
     // disconnected, or missing.
     const currentHost = this.hostId ? this.players.get(this.hostId) : null;
@@ -133,7 +132,11 @@ class Room {
       const candidate = `${[...name].slice(0, 24 - tag.length).join('')}${tag}`;
       if (!taken(candidate)) return candidate;
     }
-    return generateCallsign();
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+      const candidate = generateCallsign();
+      if (!taken(candidate)) return candidate;
+    }
+    throw new Error('Unable to allocate a unique callsign');
   }
 
   setPlayerName(playerId, name) {
@@ -142,6 +145,7 @@ class Room {
     const sanitized = sanitizePlayerName(name);
     const preferred = sanitized.toLowerCase() === 'miner' ? generateCallsign() : sanitized;
     player.name = this.uniqueHumanName(preferred, playerId);
+    this.lastActiveAt = Date.now();
   }
 
   removeClient(playerId) {
@@ -152,6 +156,7 @@ class Room {
       // No score yet — nothing to preserve for a reconnect, drop the ghost entry.
       if (!player.score && !player.blocksMined) this.players.delete(playerId);
     }
+    this.lastActiveAt = Date.now();
 
     if (this.hostId === playerId) {
       const nextHost = [...this.players.values()].find((p) => p.connected && !p.isBot);
@@ -168,10 +173,12 @@ class Room {
       const value = Number(hashrates?.[algoId] ?? player.hashrates[algoId] ?? 0);
       player.hashrates[algoId] = Number.isFinite(value) ? Math.max(0, Math.min(1e15, value)) : 0;
     }
+    this.lastActiveAt = Date.now();
   }
 
   setSettings(playerId, settings = {}) {
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can change settings' };
+    if (typeof settings.listed === 'boolean') this.listed = settings.listed;
     if (settings.variantMode !== undefined) {
       const variantMode = String(settings.variantMode);
       if (!['random', 'lwma90', 'lwma45_tip004'].includes(variantMode)) {
@@ -197,6 +204,7 @@ class Room {
         }
       }
     }
+    this.lastActiveAt = Date.now();
     return { ok: true };
   }
 
@@ -241,7 +249,41 @@ class Room {
     block.pointsEarned = pointsEarned;
     block.minerStreak = miner.streak;
     block.minerScore = miner.score;
+    this.lastActiveAt = Date.now();
     return { pointsEarned, streak: miner.streak };
+  }
+
+  discoveryState() {
+    if (this.running) return 'live';
+    if (this.roundOver) return 'between_rounds';
+    if (this.challenge) return 'paused';
+    return 'waiting';
+  }
+
+  publicListing(capacity) {
+    const humans = [...this.players.values()].filter((player) => player.connected && !player.isBot).length;
+    const challenge = publicChallenge(this.challenge);
+    return {
+      code: this.code,
+      state: this.discoveryState(),
+      humans,
+      capacity,
+      joinable: humans < capacity,
+      challenge: challenge ? { id: challenge.id, name: challenge.name } : null,
+      variant: challenge
+        ? { label: challenge.variantLabel, classification: challenge.assignmentMode }
+        : null,
+      height: this.height,
+      progress: {
+        currentBlock: this.height,
+        durationBlocks: challenge?.durationBlocks || null,
+        fraction: challenge?.durationBlocks
+          ? Math.min(1, this.height / challenge.durationBlocks)
+          : 0,
+      },
+      createdAt: new Date(this.createdAt).toISOString(),
+      lastActiveAt: new Date(this.lastActiveAt).toISOString(),
+    };
   }
 
   snapshot(forPlayerId = null) {
@@ -257,6 +299,7 @@ class Room {
       penalty: this.penalty,
       windowSize: this.windowSize,
       variantMode: this.variantMode,
+      listed: this.listed,
       speedup: this.speedup,
       goalBlocks: this.goalBlocks,
       height: this.height,
@@ -282,6 +325,7 @@ class Room {
   }
 
   broadcastState() {
+    this.lastActiveAt = Date.now();
     for (const [playerId, ws] of this.clients.entries()) {
       if (ws.readyState === 1) ws.send(JSON.stringify(this.snapshot(playerId)));
     }
@@ -696,6 +740,13 @@ class RoomManager {
     return this.rooms.get(String(code).trim().toUpperCase()) || null;
   }
 
+  publicListings(capacity) {
+    return [...this.rooms.values()]
+      .filter((room) => room.listed && room.clients.size > 0)
+      .map((room) => room.publicListing(capacity))
+      .sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt));
+  }
+
   cleanupIdle(maxAgeMs = 1000 * 60 * 60 * 2) {
     const now = Date.now();
     for (const [code, room] of this.rooms.entries()) {
@@ -707,4 +758,4 @@ class RoomManager {
   }
 }
 
-module.exports = { RoomManager, DEFAULT_HASHRATE, sanitizePlayerName };
+module.exports = { RoomManager, DEFAULT_HASHRATE, sanitizePlayerName, generateCallsign };

@@ -12,10 +12,7 @@ const Multiplayer = (function () {
   const SESSION_KEY = 'tariPlayerSession.v1';
   const CALLSIGN_KEY = 'tariCallsign.v1';
   const NEXT_CHALLENGE_TIMEOUT_MS = 7000;
-  const CALLSIGN_WORDS = [
-    'EMBER', 'ORBIT', 'BEACON', 'FORGE', 'NEXUS', 'QUARTZ', 'RELAY', 'SENTRY',
-    'SPARK', 'VECTOR', 'VAULT', 'PULSE', 'COMET', 'CIPHER', 'ANCHOR', 'TUNNEL',
-  ];
+  const ROOM_REFRESH_MS = 5000;
 
   let ws = null;
   let playerId = null;
@@ -28,6 +25,8 @@ const Multiplayer = (function () {
   let nextChallengeRequestId = null;
   let nextChallengeTimer = null;
   let experimentReturnFocus = null;
+  let roomPollTimer = null;
+  let roomRequestInFlight = false;
 
   function randomInt(max) {
     if (window.crypto?.getRandomValues) {
@@ -39,8 +38,7 @@ const Multiplayer = (function () {
   }
 
   function generateCallsign() {
-    const word = CALLSIGN_WORDS[randomInt(CALLSIGN_WORDS.length)];
-    return `MINER-${word}-${String(randomInt(100)).padStart(2, '0')}`;
+    return Callsigns.generate(randomInt);
   }
 
   function sanitizePreferredName(name) {
@@ -269,21 +267,123 @@ const Multiplayer = (function () {
     }
   }
 
+  function joinRoom(room) {
+    const roomCode = String(room || '').trim().toUpperCase();
+    const roomInput = document.getElementById('mpRoomCode');
+    if (roomInput) roomInput.value = roomCode;
+    send({
+      type: 'join_room',
+      room: roomCode,
+      name: savePreferredName(document.getElementById('mpName')?.value),
+    });
+  }
+
+  function shouldPollRooms() {
+    return !roomState?.room && document.visibilityState !== 'hidden';
+  }
+
+  function updateRoomPolling() {
+    if (shouldPollRooms()) {
+      if (roomPollTimer === null) {
+        loadLiveRooms();
+        roomPollTimer = setInterval(loadLiveRooms, ROOM_REFRESH_MS);
+      }
+      return;
+    }
+    if (roomPollTimer !== null) {
+      clearInterval(roomPollTimer);
+      roomPollTimer = null;
+    }
+  }
+
+  async function loadLiveRooms() {
+    if (!shouldPollRooms() || roomRequestInFlight) return;
+    roomRequestInFlight = true;
+    const refreshButton = document.getElementById('mpRoomsRefresh');
+    if (refreshButton) refreshButton.disabled = true;
+    try {
+      const response = await fetch('/api/rooms', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      renderLiveRooms(Array.isArray(data.rooms) ? data.rooms : []);
+    } catch {
+      const list = document.getElementById('mpLiveRooms');
+      if (list) {
+        list.replaceChildren();
+        const message = document.createElement('p');
+        message.className = 'mp-live-empty';
+        message.textContent = 'LIVE GAMES UNAVAILABLE — USE AN INVITE CODE OR TRY REFRESH.';
+        list.append(message);
+      }
+    } finally {
+      roomRequestInFlight = false;
+      if (refreshButton) refreshButton.disabled = false;
+    }
+  }
+
+  function renderLiveRooms(rooms) {
+    const list = document.getElementById('mpLiveRooms');
+    if (!list) return;
+    list.replaceChildren();
+    if (!rooms.length) {
+      const message = document.createElement('p');
+      message.className = 'mp-live-empty';
+      message.textContent = 'NO PUBLIC GAMES YET — CREATE THE FIRST ROOM.';
+      list.append(message);
+      return;
+    }
+    for (const room of rooms) {
+      const card = document.createElement('article');
+      card.className = 'mp-live-room';
+
+      const heading = document.createElement('div');
+      heading.className = 'mp-live-room-head';
+      const code = document.createElement('strong');
+      code.textContent = String(room.code || '-----');
+      const state = document.createElement('span');
+      state.className = `mp-live-state ${String(room.state || 'waiting').replace(/[^a-z_]/g, '')}`;
+      state.textContent = String(room.state || 'waiting').replaceAll('_', ' ').toUpperCase();
+      heading.append(code, state);
+
+      const challenge = document.createElement('p');
+      challenge.className = 'mp-live-challenge';
+      challenge.textContent = String(room.challenge?.name || 'Awaiting challenge');
+
+      const facts = document.createElement('p');
+      facts.className = 'mp-live-facts';
+      const height = Number(room.height) || 0;
+      const duration = Number(room.progress?.durationBlocks) || 0;
+      const progress = duration ? ` · BLOCK ${height}/${duration}` : ` · BLOCK ${height}`;
+      facts.textContent = `${Number(room.humans) || 0}/${Number(room.capacity) || 0} PILOTS${progress}`;
+
+      const join = document.createElement('button');
+      join.type = 'button';
+      join.className = 'mp-arcade-btn small';
+      join.textContent = room.joinable === false ? 'FULL' : 'JOIN';
+      join.disabled = room.joinable === false;
+      join.addEventListener('click', () => joinRoom(room.code));
+
+      card.append(heading, challenge, facts, join);
+      list.append(card);
+    }
+  }
+
   function init() {
     initPreferredName();
     document.getElementById('mpName')?.addEventListener('change', (event) => {
       savePreferredName(event.target.value);
     });
+    document.getElementById('mpRollCallsign')?.addEventListener('click', () => {
+      savePreferredName(generateCallsign());
+    });
     document.getElementById('mpCreate')?.addEventListener('click', () => {
       send({ type: 'create_room', name: savePreferredName(document.getElementById('mpName')?.value) });
     });
     document.getElementById('mpJoin')?.addEventListener('click', () => {
-      send({
-        type: 'join_room',
-        room: document.getElementById('mpRoomCode')?.value || '',
-        name: savePreferredName(document.getElementById('mpName')?.value),
-      });
+      joinRoom(document.getElementById('mpRoomCode')?.value || '');
     });
+    document.getElementById('mpRoomsRefresh')?.addEventListener('click', loadLiveRooms);
+    document.addEventListener('visibilitychange', updateRoomPolling);
     document.getElementById('mpStart')?.addEventListener('click', () => send({ type: 'start' }));
     document.getElementById('mpStop')?.addEventListener('click', () => send({ type: 'stop' }));
     document.getElementById('mpReset')?.addEventListener('click', () => {
@@ -384,6 +484,9 @@ const Multiplayer = (function () {
     });
     document.getElementById('mpVariantMode')?.addEventListener('change', (event) => {
       send({ type: 'set_settings', settings: { variantMode: event.target.value } });
+    });
+    document.getElementById('mpListed')?.addEventListener('change', (event) => {
+      send({ type: 'set_settings', settings: { listed: event.target.checked } });
     });
 
     document.getElementById('mpChallengeGo')?.addEventListener('click', hideChallengeCard);
@@ -1044,6 +1147,7 @@ const Multiplayer = (function () {
     const inRoom = Boolean(roomState?.room);
     lobby.style.display = inRoom ? 'none' : 'block';
     session.style.display = inRoom ? 'block' : 'none';
+    updateRoomPolling();
     renderStatus();
     if (!inRoom) return;
 
@@ -1068,6 +1172,16 @@ const Multiplayer = (function () {
         ? 'Only the host can select the network variant'
         : (variantMode.disabled ? 'Locked while a challenge is armed' : 'Select randomized research or a manual exploratory variant');
     }
+    const listedInput = document.getElementById('mpListed');
+    const listedStatus = document.getElementById('mpListedStatus');
+    if (listedInput) {
+      listedInput.checked = roomState.listed !== false;
+      listedInput.disabled = !isHost;
+      listedInput.title = isHost
+        ? 'Hide or show this room in Live Games'
+        : 'Only the host can change room discovery';
+    }
+    if (listedStatus) listedStatus.textContent = roomState.listed === false ? 'PRIVATE' : 'LISTED';
     if (isHost) {
       const startButton = document.getElementById('mpStart');
       const stopButton = document.getElementById('mpStop');

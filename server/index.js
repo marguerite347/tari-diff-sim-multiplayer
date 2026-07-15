@@ -19,10 +19,14 @@ const MESSAGE_RATE_LIMIT = 30;
 const MESSAGE_RATE_WINDOW_MS = 10_000;
 const RESET_RATE_LIMIT = 5;
 const RESET_RATE_WINDOW_MS = 10 * 60_000;
+const ROOMS_RATE_LIMIT = 60;
+const ROOMS_RATE_WINDOW_MS = 10_000;
 const RESUME_SECRET = crypto.randomBytes(32);
 const resetAttempts = new Map();
+const roomListRequests = new Map();
 
 const app = express();
+app.set('trust proxy', 1);
 app.use((_req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',
@@ -128,6 +132,32 @@ app.post('/api/research/reset', (req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 const rooms = new RoomManager();
+
+function roomListRateLimited(req) {
+  const now = Date.now();
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown').slice(0, 128);
+  const recent = (roomListRequests.get(key) || []).filter((ts) => now - ts < ROOMS_RATE_WINDOW_MS);
+  recent.push(now);
+  roomListRequests.set(key, recent);
+  if (roomListRequests.size > 1000) {
+    for (const [requester, timestamps] of roomListRequests.entries()) {
+      if (!timestamps.some((ts) => now - ts < ROOMS_RATE_WINDOW_MS)) roomListRequests.delete(requester);
+    }
+  }
+  return recent.length > ROOMS_RATE_LIMIT;
+}
+
+app.get('/api/rooms', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (roomListRateLimited(req)) {
+    return res.status(429).json({ ok: false, error: 'Too many room-list requests; try again shortly' });
+  }
+  res.json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    rooms: rooms.publicListings(MAX_HUMANS_PER_ROOM),
+  });
+});
 
 // Per-room debug snapshot for handing to a debugging agent. Localhost research
 // tool — no auth, but only plain JSON (never socket objects) leaves here.

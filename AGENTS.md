@@ -29,6 +29,8 @@ A community **research game**: a Node/Express + WebSocket multiplayer "network d
 | `data/rounds.jsonl` | Research output (gitignored — never commit) |
 | `assets/skyboxes/` | ~1.6 GB of skybox images + `manifest.json` (untracked — never commit) |
 
+`/api/rooms` exposes safe metadata for listed rooms from the process-local `RoomManager`. Room discovery and WebSockets require a single Railway replica until shared state and sticky routing exist; restarts intentionally clear the live-games list.
+
 ## Run locally
 
 ```bash

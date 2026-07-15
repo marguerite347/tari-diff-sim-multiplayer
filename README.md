@@ -38,9 +38,12 @@ npm start
 
 - Server owns LWMA windows, difficulty, next-block sampling, and chain history.
 - Clients send intents only: join, set hashrate, start/stop (host).
+- `/api/rooms` discovers listed rooms from the server's in-memory room registry; hosts can make a room private without disabling exact-code or invite-link joins.
 - Mining race: `rate_i = hashrate_i / targetDiff_i`, winner ~ categorical, block time ~ exponential — the LWMA feedback loop is live, so difficulty responds to power shifts.
 - TIP-004 consecutive same-algo penalty doubles target time per streak (set by the challenge variant, not the host, to keep experiments clean).
 - `speedup` compresses simulated seconds into wall-clock time so rooms feel interactive.
+
+Rooms and WebSocket sessions are process-local and disappear on restart. Run one Railway replica: multiple replicas would each have a separate room list and WebSocket registry until shared room state and sticky routing are added.
 
 ## Challenges & research data
 

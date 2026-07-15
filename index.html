@@ -113,7 +113,10 @@
 
             <div class="mp-title-form">
                 <label>Callsign
-                    <input id="mpName" type="text" maxlength="24" placeholder="MINER-EMBER-47">
+                    <span class="mp-callsign-field">
+                        <input id="mpName" type="text" maxlength="24" placeholder="MINER-SOLAR-SENTRY-482">
+                        <button id="mpRollCallsign" class="mp-roll-callsign" type="button" aria-label="Roll a new callsign" title="Roll a new callsign">&#9854;</button>
+                    </span>
                 </label>
                 <label>Room code
                     <input id="mpRoomCode" type="text" maxlength="8" placeholder="ABCDE" style="text-transform:uppercase">
@@ -124,6 +127,19 @@
                 <button id="mpJoin" class="mp-arcade-btn">Join game</button>
                 <button id="mpHelpLobby" class="mp-arcade-btn">? How to play</button>
             </div>
+            <p class="mp-listing-disclosure">NEW ROOMS APPEAR IN LIVE GAMES BY DEFAULT · HOSTS CAN SWITCH TO PRIVATE ANY TIME</p>
+            <section class="mp-live-games" aria-labelledby="mpLiveGamesTitle">
+                <div class="mp-live-games-head">
+                    <div>
+                        <p class="mp-title-kicker">Network lobby</p>
+                        <h3 id="mpLiveGamesTitle">LIVE GAMES</h3>
+                    </div>
+                    <button id="mpRoomsRefresh" class="mp-arcade-btn small" type="button">REFRESH</button>
+                </div>
+                <div id="mpLiveRooms" class="mp-live-rooms" aria-live="polite">
+                    <p class="mp-live-empty">SCANNING FOR PUBLIC ROOMS…</p>
+                </div>
+            </section>
             <p class="mp-insert-coin">— every round is a random network challenge · your play becomes Tari research data —</p>
             <p class="mp-conn-line">Link: <span id="mpConnStatus">Idle</span> <span id="mpStatus"></span></p>
         </div>
@@ -204,6 +220,11 @@
                 </div>
             </div>
             <p class="mp-share-line">Invite link: <code id="mpShareLink"></code> <span class="mp-conn-line">· <span id="mpConnStatus2"></span></span></p>
+            <label class="mp-listing-control">
+                <input id="mpListed" type="checkbox" checked>
+                <span id="mpListedStatus">LISTED</span>
+                <small>Private hides this room from Live Games; the invite link still works.</small>
+            </label>
 
             <!-- 3D battlefield arena -->
             <div class="mp-battlefield" id="mpBattlefield">
@@ -474,6 +495,7 @@
     <script src="js/battlefield.js"></script>
     <script src="js/llmbridge.js"></script>
     <script src="js/agent.js"></script>
+    <script src="js/callsigns.js"></script>
     <script src="js/multiplayer.js"></script>
 </body>
 </html>
