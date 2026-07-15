@@ -60,7 +60,8 @@ test('public listings respect privacy and contain safe metadata only', () => {
   assert.deepEqual(Object.keys(listings[0]).sort(), [
     'capacity', 'challenge', 'code', 'connectedHumans', 'countdownDeadline',
     'countdownKind', 'createdAt', 'height', 'humans', 'joinable', 'lastActiveAt',
-    'lifecycleMode', 'progress', 'remainingMs', 'state', 'variant',
+    'lifecycleMode', 'progress', 'remainingMs', 'sessionComplete', 'sessionLength',
+    'sessionRound', 'state', 'variant',
   ]);
   assert.equal(JSON.stringify(listings).includes('PRIVATE PILOT'), false);
   assert.equal(room.publicListing(1).joinable, false);

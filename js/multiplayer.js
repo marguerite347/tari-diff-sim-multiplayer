@@ -27,6 +27,7 @@ const Multiplayer = (function () {
   let experimentReturnFocus = null;
   let roomPollTimer = null;
   let roomRequestInFlight = false;
+  let activeCopilotPane = null;
   const liveJoinBriefedRooms = new Set();
 
   function randomInt(max) {
@@ -122,8 +123,14 @@ const Multiplayer = (function () {
         if (window.Battlefield && msg.shadow) Battlefield.setShadowCount(msg.shadow.count, msg.shadow.algo);
         render();
         maybeShowLiveJoinBrief(msg);
-        if (msg.roundOver && msg.lastResult) showResult(msg.lastResult);
-        else hideVictory();
+        if (msg.sessionComplete && msg.sessionSummary) {
+          hideVictory();
+          showSessionSummary(msg.sessionSummary);
+        } else {
+          hideSessionSummary();
+          if (msg.roundOver && msg.lastResult) showResult(msg.lastResult);
+          else hideVictory();
+        }
         break;
       case 'challenge_brief':
         setNextChallengePending(false);
@@ -224,7 +231,23 @@ const Multiplayer = (function () {
         showResult(msg.result);
         loadResearch();
         render();
-        if (window.Copilot) Copilot.onResult(msg.result);
+        if (window.Copilot) {
+          Copilot.onResult(msg.result);
+          refreshMemoryPane();
+        }
+        break;
+      case 'session_complete':
+        if (roomState) {
+          roomState.sessionComplete = true;
+          roomState.sessionSummary = msg.summary;
+          roomState.sessionReturnDeadline = msg.returnDeadline;
+        }
+        hideVictory();
+        showSessionSummary(msg.summary);
+        render();
+        break;
+      case 'session_ended':
+        returnToLobby(msg.message || 'Session complete');
         break;
       case 'status':
         statusMessage = msg.message || '';
@@ -253,9 +276,7 @@ const Multiplayer = (function () {
         showToast(statusMessage, 'warn');
         break;
       case 'left':
-        roomState = null;
-        hideVictory();
-        render();
+        returnToLobby();
         break;
       default:
         break;
@@ -361,8 +382,15 @@ const Multiplayer = (function () {
         ? `STARTS IN ${formatDuration(room.remainingMs)}`
         : (room.countdownKind === 'intermission'
             ? `NEXT IN ${formatDuration(room.remainingMs)}`
-            : (room.state === 'live' ? `${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'} LEFT` : ''));
-      challenge.textContent = countdown || String(room.challenge?.name || 'CONTINUOUS AUTO ROOM');
+            : (room.countdownKind === 'session_end'
+                ? `SESSION COMPLETE · LOBBY IN ${formatDuration(room.remainingMs)}`
+                : (room.state === 'live' ? `${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'} LEFT` : '')));
+      const sessionLabel = room.sessionRound && room.sessionLength
+        ? `CHALLENGE ${room.sessionRound} OF ${room.sessionLength}`
+        : '';
+      challenge.textContent = [sessionLabel, countdown || String(room.challenge?.name || 'PUBLIC SESSION')]
+        .filter(Boolean)
+        .join(' · ');
 
       const facts = document.createElement('p');
       facts.className = 'mp-live-facts';
@@ -404,19 +432,29 @@ const Multiplayer = (function () {
     document.getElementById('mpStart')?.addEventListener('click', () => send({ type: 'start' }));
     document.getElementById('mpStop')?.addEventListener('click', () => send({ type: 'stop' }));
     document.getElementById('mpReset')?.addEventListener('click', () => {
-      if (!window.confirm('ABANDON THIS ROUND? CURRENT PROGRESS AND SCORES WILL BE LOST.')) return;
+      const publicSolo = roomState?.lifecycleMode === 'auto' && roomState?.canSoloControl;
+      const warning = publicSolo
+        ? 'ABANDON THIS ROUND? IT WILL NOT BE RECORDED AND THIS CHALLENGE SLOT WILL RESTART.'
+        : 'ABANDON THIS ROUND? CURRENT PROGRESS AND SCORES WILL BE LOST.';
+      if (!window.confirm(warning)) return;
       hideVictory();
       if (window.Battlefield) Battlefield.reset();
       send({ type: 'reset' });
     });
     document.getElementById('mpLeave')?.addEventListener('click', () => {
       hideVictory();
+      hideSessionSummary();
       send({ type: 'leave' });
       history.replaceState({}, '', location.pathname);
     });
+    document.getElementById('mpSessionLeave')?.addEventListener('click', () => {
+      send({ type: 'leave' });
+      returnToLobby();
+    });
     document.getElementById('mpVictoryDismiss')?.addEventListener('click', () => {
       const isHost = roomState?.hostId === roomState?.you;
-      if (!isHost || nextChallengePending) return;
+      const canControl = roomState?.lifecycleMode === 'auto' ? roomState?.canSoloControl : isHost;
+      if (!canControl || nextChallengePending) return;
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
       setNextChallengePending(true, requestId);
       if (!send({ type: 'next_challenge', requestId })) {
@@ -486,10 +524,8 @@ const Multiplayer = (function () {
         Copilot.setEnabled(next, roomState);
         renderCopilotToggle(next);
       });
-      document.getElementById('mpCopilotMemory')?.addEventListener('click', () => {
-        copilotLog(`What I've learned so far:\n${Copilot.memoryReport()}`, 'sys');
-      });
     }
+    initCopilotPanes();
 
     if (window.LLMBridge) LLMBridge.initUI({ log: copilotLog });
 
@@ -588,6 +624,67 @@ const Multiplayer = (function () {
     btn.classList.toggle('primary', on);
   }
 
+  function initCopilotPanes() {
+    const tabs = [
+      { pane: 'memory', button: document.getElementById('mpCopilotMemory') },
+      { pane: 'llm', button: document.getElementById('mpLlmAdd') },
+    ].filter((entry) => entry.button);
+    tabs.forEach((entry, index) => {
+      entry.button.addEventListener('click', () => setCopilotPane(entry.pane));
+      entry.button.addEventListener('keydown', (event) => {
+        let targetIndex = null;
+        if (event.key === 'ArrowRight') targetIndex = (index + 1) % tabs.length;
+        if (event.key === 'ArrowLeft') targetIndex = (index - 1 + tabs.length) % tabs.length;
+        if (event.key === 'Home') targetIndex = 0;
+        if (event.key === 'End') targetIndex = tabs.length - 1;
+        if (targetIndex === null) return;
+        event.preventDefault();
+        setCopilotPane(tabs[targetIndex].pane);
+        tabs[targetIndex].button.focus();
+      });
+    });
+    document.addEventListener('copilot:select-pane', (event) => {
+      if (event.detail?.pane === 'llm') setCopilotPane('llm');
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && activeCopilotPane) {
+        const returnFocus = activeCopilotPane === 'memory'
+          ? document.getElementById('mpCopilotMemory')
+          : document.getElementById('mpLlmAdd');
+        setCopilotPane(null);
+        returnFocus?.focus();
+      }
+    });
+  }
+
+  function setCopilotPane(pane) {
+    const details = document.getElementById('mpCopilotDetails');
+    const memory = document.getElementById('mpCopilotMemoryPanel');
+    const llm = document.getElementById('mpLlmPanel');
+    const memoryTab = document.getElementById('mpCopilotMemory');
+    const llmTab = document.getElementById('mpLlmAdd');
+    activeCopilotPane = pane === 'memory' || pane === 'llm' ? pane : null;
+    if (details) details.hidden = !activeCopilotPane;
+    if (memory) memory.hidden = activeCopilotPane !== 'memory';
+    if (llm) llm.hidden = activeCopilotPane !== 'llm';
+    if (memoryTab) memoryTab.setAttribute('aria-selected', String(activeCopilotPane === 'memory'));
+    if (llmTab) llmTab.setAttribute('aria-selected', String(activeCopilotPane === 'llm'));
+    if (activeCopilotPane === 'memory') refreshMemoryPane();
+  }
+
+  function refreshMemoryPane() {
+    const panel = document.getElementById('mpCopilotMemoryPanel');
+    if (!panel || !window.Copilot) return;
+    const report = Copilot.memoryReport();
+    if (!report || /^Memory is empty/i.test(report)) {
+      panel.innerHTML = '<p class="mp-memory-empty">No completed rounds yet. Copilot saves a postmortem here after each challenge.</p>';
+      return;
+    }
+    panel.innerHTML = report.split('\n').filter(Boolean)
+      .map((line) => `<div class="mp-memory-entry">${escapeHtml(line)}</div>`)
+      .join('');
+  }
+
   /** Autopilot defaults to ON the first time this player lands in a room. */
   function engageCopilotByDefault() {
     if (copilotAutoEngaged || !window.Copilot) return;
@@ -633,7 +730,10 @@ const Multiplayer = (function () {
   function renderStatusLamp() {
     const el = document.getElementById('mpRunning');
     if (!el || !roomState) return;
-    if (roomState.countdownKind === 'lobby') {
+    if (roomState.countdownKind === 'session_end' || roomState.sessionComplete) {
+      el.textContent = `LOBBY ${formatDuration(lifecycleRemainingMs())}`;
+      el.className = 'mp-hud-value mp-status-lamp over';
+    } else if (roomState.countdownKind === 'lobby') {
       el.textContent = `STARTS ${formatDuration(lifecycleRemainingMs())}`;
       el.className = 'mp-hud-value mp-status-lamp over';
     } else if (roomState.countdownKind === 'intermission') {
@@ -1011,20 +1111,70 @@ const Multiplayer = (function () {
     if (overlay) overlay.hidden = true;
   }
 
+  function showSessionSummary(summary) {
+    const overlay = document.getElementById('mpSessionComplete');
+    if (!overlay || !summary) return;
+    const defended = Number(summary.objectivesDefended) || 0;
+    const length = Number(summary.sessionLength) || 5;
+    document.getElementById('mpSessionDefended').textContent =
+      `NETWORK OBJECTIVES DEFENDED ${defended}/${length}`;
+    const official = Number(summary.classifications?.official) || 0;
+    const exploratory = Number(summary.classifications?.exploratory) || 0;
+    document.getElementById('mpSessionClassification').textContent =
+      `OFFICIAL RANDOMIZED ${official} · EXPLORATORY MANUAL ${exploratory}`;
+    document.getElementById('mpSessionResults').innerHTML = (summary.results || []).map((result) => `
+      <div class="mp-session-result-row ${result.success ? 'success' : ''}">
+        <span>${Number(result.round) || '—'}</span>
+        <strong>${escapeHtml(result.challengeName)} · ${escapeHtml(result.verdict)}</strong>
+        <small>${escapeHtml(result.variantLabel)} · ${result.assignmentMode === 'manual' ? 'EXPLORATORY' : 'OFFICIAL'}</small>
+      </div>`).join('');
+    const health = summary.health || {};
+    document.getElementById('mpSessionHealth').innerHTML = `
+      <div><span>MEAN BT</span><strong>${Number(health.meanBt) || 0}s</strong></div>
+      <div><span>ORPHANS · TOTAL</span><strong>${Number(health.orphans) || 0}</strong></div>
+      <div><span>DEEPEST REORG · MAX</span><strong>${Number(health.deepestReorg) || 0}</strong></div>
+      <div><span>LONGEST WAIT · MAX</span><strong>${Number(health.longestWait) || 0}s</strong></div>
+      <div><span>DIFF SWING · MAX</span><strong>${Number(health.difficultySwing) || 1}x</strong></div>`;
+    document.getElementById('mpSessionLeaderboard').innerHTML = (summary.contributions || []).map((player, index) => `
+      <div class="mp-session-player">
+        <span>${index + 1}. ${escapeHtml(player.name)}</span>
+        <strong>${Number(player.score) || 0} PTS · ${Number(player.blocksMined) || 0} BLOCKS</strong>
+      </div>`).join('') || '<p class="mp-memory-empty">No player contributions recorded.</p>';
+    overlay.hidden = false;
+    updateLifecycleDisplay();
+  }
+
+  function hideSessionSummary() {
+    const overlay = document.getElementById('mpSessionComplete');
+    if (overlay) overlay.hidden = true;
+  }
+
+  function returnToLobby(message = '') {
+    roomState = null;
+    hideVictory();
+    hideSessionSummary();
+    hideChallengeCard();
+    history.replaceState({}, '', location.pathname);
+    if (message) statusMessage = message.toUpperCase();
+    render();
+    loadLiveRooms();
+  }
+
   function renderResultAction() {
     const button = document.getElementById('mpVictoryDismiss');
     const setupButton = document.getElementById('mpVictorySetup');
     if (!button) return;
     const isHost = roomState?.hostId === roomState?.you;
     const autoManaged = roomState?.lifecycleMode === 'auto';
+    const canControl = autoManaged ? !!roomState?.canSoloControl : isHost;
     if (setupButton) {
       setupButton.hidden = !isHost || autoManaged;
       setupButton.disabled = nextChallengePending;
     }
-    button.hidden = autoManaged && !isHost;
+    button.hidden = autoManaged && (!canControl || roomState?.sessionComplete);
     if (autoManaged) {
       button.textContent = nextChallengePending ? 'STARTING NEXT CHALLENGE…' : 'START NEXT NOW';
-      button.disabled = nextChallengePending;
+      button.disabled = nextChallengePending || !canControl;
       updateLifecycleDisplay();
       return;
     }
@@ -1188,6 +1338,7 @@ const Multiplayer = (function () {
 
     const isHost = roomState.hostId === roomState.you;
     const autoManaged = roomState.lifecycleMode === 'auto';
+    const canRoundControl = autoManaged ? !!roomState.canSoloControl : isHost;
     document.getElementById('mpRoomLabel').textContent = roomState.room;
     const debugLink = document.getElementById('mpDebugLink');
     if (debugLink) debugLink.href = `/api/debug/${roomState.room}`;
@@ -1197,7 +1348,7 @@ const Multiplayer = (function () {
     const hostControls = document.getElementById('mpHostControls');
     const roundControls = document.getElementById('mpRoundControls');
     if (hostControls) hostControls.style.display = isHost ? '' : 'none';
-    if (roundControls) roundControls.style.display = isHost ? '' : 'none';
+    if (roundControls) roundControls.style.display = canRoundControl ? '' : 'none';
     const variantMode = document.getElementById('mpVariantMode');
     if (variantMode) {
       if (document.activeElement !== variantMode) variantMode.value = roomState.variantMode || 'random';
@@ -1212,11 +1363,20 @@ const Multiplayer = (function () {
       listedInput.checked = roomState.listed !== false;
       listedInput.disabled = !isHost || roomState.running || !!roomState.challenge || roomState.roundOver;
       listedInput.title = isHost
-        ? (listedInput.disabled ? 'Privacy locks once a challenge is armed' : 'Switch between continuous public and host-controlled private play')
+        ? (listedInput.disabled ? 'Privacy locks once a challenge is armed' : 'Switch between five-challenge public sessions and host-controlled private play')
         : 'Only the host can change room discovery';
     }
     if (listedStatus) listedStatus.textContent = roomState.listed === false ? 'PRIVATE' : 'LISTED';
-    if (isHost) {
+    const controlMode = document.getElementById('mpControlMode');
+    if (controlMode) {
+      controlMode.className = `mp-control-mode ${autoManaged ? roomState.controlMode : 'host'}`;
+      controlMode.textContent = autoManaged
+        ? (roomState.controlMode === 'solo'
+            ? 'SOLO CONTROL · PAUSE, RESUME, START NOW, OR ABANDON WITHOUT RECORDING'
+            : 'PUBLIC AUTO-MANAGED · SERVER CONTROLS ROUND LIFECYCLE')
+        : 'PRIVATE HOST CONTROL · CONTINUE OR RETURN TO SETUP AFTER EACH ROUND';
+    }
+    if (canRoundControl) {
       const startButton = document.getElementById('mpStart');
       const stopButton = document.getElementById('mpStop');
       const resetButton = document.getElementById('mpReset');
@@ -1224,23 +1384,25 @@ const Multiplayer = (function () {
       const paused = canStart && !!roomState.challenge && !roomState.roundOver;
       if (startButton) {
         const canStartNow = autoManaged
-          ? canStart && (roomState.countdownKind === 'lobby' || roomState.countdownKind === 'intermission')
+          ? canStart && !roomState.sessionComplete && (
+              paused || roomState.countdownKind === 'lobby' || roomState.countdownKind === 'intermission'
+            )
           : canStart;
         startButton.style.display = canStartNow ? '' : 'none';
         startButton.disabled = !canStart;
         startButton.textContent = autoManaged
-          ? (roomState.countdownKind === 'intermission' ? '▶ START NEXT NOW' : '▶ START NOW')
+          ? (paused ? '▶ RESUME' : (roomState.countdownKind === 'intermission' ? '▶ START NEXT NOW' : '▶ START NOW'))
           : (roomState.roundOver ? '▶ START NEXT CHALLENGE' : (paused ? '▶ RESUME' : '▶ START CHALLENGE'));
       }
       if (stopButton) {
-        stopButton.style.display = !autoManaged && roomState.running ? '' : 'none';
+        stopButton.style.display = roomState.running ? '' : 'none';
         stopButton.disabled = !roomState.running;
         stopButton.textContent = 'PAUSE';
       }
       if (resetButton) {
-        resetButton.style.display = !autoManaged && roomState.challenge && !roomState.roundOver ? '' : 'none';
+        resetButton.style.display = roomState.challenge && !roomState.roundOver ? '' : 'none';
         resetButton.disabled = !roomState.challenge || roomState.roundOver;
-        resetButton.textContent = 'ABANDON ROUND';
+        resetButton.textContent = autoManaged ? 'ABANDON CURRENT ROUND' : 'ABANDON ROUND';
       }
     }
     const speedInput = document.getElementById('mpSpeedup');
@@ -1265,7 +1427,7 @@ const Multiplayer = (function () {
 
     const feed = document.getElementById('mpBlockFeed');
     feed.innerHTML = (roomState.recentBlocks || []).slice().reverse().map(blockCard).join('') ||
-      `<div class="dim mp-feed-empty">${autoManaged ? 'PUBLIC ROOM IS CONTINUOUS · SERVER AUTO-STARTS' : 'WAITING FOR HOST TO START'}</div>`;
+      `<div class="dim mp-feed-empty">${autoManaged ? 'PUBLIC FIVE-CHALLENGE SESSION · SERVER AUTO-MANAGED' : 'WAITING FOR HOST TO START'}</div>`;
 
     history.replaceState({}, '', `/?room=${roomState.room}`);
     updateLiveStats();
@@ -1396,22 +1558,28 @@ const Multiplayer = (function () {
 
   function lifecycleCopy() {
     if (!roomState) return '';
+    const sessionLabel = roomState.sessionRound && roomState.sessionLength
+      ? `CHALLENGE ${roomState.sessionRound} OF ${roomState.sessionLength}`
+      : '';
+    if (roomState.countdownKind === 'session_end' || roomState.sessionComplete) {
+      return `RETURNING TO LOBBY IN ${formatDuration(lifecycleRemainingMs())}`;
+    }
     if (roomState.countdownKind === 'lobby') {
       const humans = Number(roomState.connectedHumans) || 0;
-      return `GAME STARTS IN ${formatDuration(lifecycleRemainingMs())} · ${humans} PLAYER${humans === 1 ? '' : 'S'} READY`;
+      return `${sessionLabel} · GAME STARTS IN ${formatDuration(lifecycleRemainingMs())} · ${humans} PLAYER${humans === 1 ? '' : 'S'} READY`;
     }
     if (roomState.countdownKind === 'intermission') {
-      return `NEXT CHALLENGE IN ${formatDuration(lifecycleRemainingMs())}`;
+      return `${sessionLabel} COMPLETE · NEXT CHALLENGE IN ${formatDuration(lifecycleRemainingMs())}`;
     }
     if (roomState.lifecycleMode === 'auto' && roomState.running && roomState.challenge) {
       const blocksLeft = Math.max(
         0,
         (Number(roomState.challenge.durationBlocks) || 0) - (Number(roomState.height) || 0)
       );
-      return `ROUND ENDS IN ${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'}`;
+      return `${sessionLabel} · ROUND ENDS IN ${blocksLeft} BLOCK${blocksLeft === 1 ? '' : 'S'}`;
     }
     return roomState.lifecycleMode === 'auto'
-      ? 'PUBLIC ROOM · CONTINUOUS · SERVER AUTO-MANAGED'
+      ? `${sessionLabel} · PUBLIC SESSION · SERVER AUTO-MANAGED`
       : 'PRIVATE ROOM · HOST-CONTROLLED';
   }
 
@@ -1424,6 +1592,8 @@ const Multiplayer = (function () {
     if (resultCountdown) {
       resultCountdown.textContent = roomState.roundOver && roomState.lifecycleMode === 'auto' ? copy : '';
     }
+    const sessionReturn = document.getElementById('mpSessionReturn');
+    if (sessionReturn) sessionReturn.textContent = roomState.sessionComplete ? copy : '';
     const lead = document.getElementById('mpRaceLead');
     if (lead && !roomState.challenge && roomState.lifecycleMode === 'auto') lead.textContent = copy;
     renderStatusLamp();

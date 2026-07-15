@@ -53,7 +53,7 @@
                 <p class="mp-title-kicker">Pilot briefing</p>
                 <h2 class="mp-victory-logo">HOW TO PLAY</h2>
                 <ol class="mp-tutorial-steps">
-                    <li><strong>Suit up.</strong> You get a generated callsign that you can edit, then create or join a game. Listed public rooms auto-start after 10 seconds, accept live reinforcements, and begin the next challenge 5 seconds after results while anyone remains; private rooms are host-controlled.</li>
+                    <li><strong>Suit up.</strong> You get a generated callsign that you can edit, then create or join a game. Listed public rooms run five challenges, auto-start after 10 seconds, accept live reinforcements, and move on 5 seconds after each result. Private rooms remain host-controlled and unbounded.</li>
                     <li><strong>Read the mission HUD.</strong> Every round a scripted attacker messes with the network. Your objective stays at the top: keep block times stable, or keep any one algo below its share limit.</li>
                     <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
                     <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and neon violet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
@@ -127,7 +127,7 @@
                 <button id="mpJoin" class="mp-arcade-btn">Join game</button>
                 <button id="mpHelpLobby" class="mp-arcade-btn">? How to play</button>
             </div>
-            <p class="mp-listing-disclosure">PUBLIC ROOMS RUN CONTINUOUSLY · PRIVATE ROOMS ARE HOST-CONTROLLED · PRIVACY CAN CHANGE ONLY WHILE WAITING</p>
+            <p class="mp-listing-disclosure">PUBLIC ROOMS RUN FIVE-CHALLENGE SESSIONS · PRIVATE ROOMS ARE HOST-CONTROLLED · PRIVACY CAN CHANGE ONLY WHILE WAITING</p>
             <section class="mp-live-games" aria-labelledby="mpLiveGamesTitle">
                 <div class="mp-live-games-head">
                     <div>
@@ -160,6 +160,21 @@
                         <button id="mpVictoryDismiss" class="mp-arcade-btn primary">CONTINUE TO NEXT CHALLENGE</button>
                         <button id="mpVictorySetup" class="mp-arcade-btn">RETURN TO SETUP</button>
                     </div>
+                </div>
+            </div>
+            <div id="mpSessionComplete" class="mp-victory" role="dialog" aria-modal="true" aria-labelledby="mpSessionCompleteTitle" hidden>
+                <div class="mp-victory-card mp-session-summary-card">
+                    <p class="mp-title-kicker">Five-challenge report</p>
+                    <h2 id="mpSessionCompleteTitle" class="mp-victory-logo">SESSION COMPLETE</h2>
+                    <p id="mpSessionDefended" class="mp-session-defended"></p>
+                    <p id="mpSessionClassification" class="mp-session-classification"></p>
+                    <p id="mpSessionReturn" class="mp-lifecycle-countdown" aria-live="polite"></p>
+                    <div id="mpSessionResults" class="mp-session-results"></div>
+                    <div id="mpSessionHealth" class="mp-result-stats"></div>
+                    <h3 class="mp-session-heading">PLAYER CONTRIBUTIONS</h3>
+                    <div id="mpSessionLeaderboard" class="mp-session-leaderboard"></div>
+                    <p class="mp-result-note">Each challenge recorded one independent research datapoint. This summary is not a sixth round.</p>
+                    <button id="mpSessionLeave" class="mp-arcade-btn primary">RETURN TO LOBBY NOW</button>
                 </div>
             </div>
             <div id="mpChallengeCard" class="mp-victory" hidden>
@@ -225,8 +240,9 @@
             <label class="mp-listing-control">
                 <input id="mpListed" type="checkbox" checked>
                 <span id="mpListedStatus">LISTED</span>
-                <small id="mpLifecycleNote">Public rooms start in 10s, accept live joins, and continue 5s after results. Private rooms use host controls; invite links always work.</small>
+                <small id="mpLifecycleNote">Public rooms run five challenges, then return everyone to the lobby. Private rooms stay host-controlled and unbounded.</small>
             </label>
+            <p id="mpControlMode" class="mp-control-mode"></p>
 
             <!-- 3D battlefield arena -->
             <div class="mp-battlefield" id="mpBattlefield">
@@ -293,45 +309,51 @@
                     <div class="mp-copilot-head">
                         <div class="mp-copilot-controls">
                             <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot · OFF</button>
-                            <button id="mpCopilotMemory" class="mp-arcade-btn">View memory</button>
-                            <button id="mpLlmAdd" class="mp-arcade-btn mp-copilot-llm" aria-controls="mpLlmPanel" aria-expanded="false" aria-label="Add LLM; not configured">Add LLM</button>
+                            <div class="mp-copilot-tabs" role="tablist" aria-label="Copilot details">
+                                <button id="mpCopilotMemory" class="mp-arcade-btn" role="tab" aria-selected="false" aria-controls="mpCopilotMemoryPanel">View memory</button>
+                                <button id="mpLlmAdd" class="mp-arcade-btn mp-copilot-llm" role="tab" aria-selected="false" aria-controls="mpLlmPanel" aria-label="Add LLM; not configured">Add LLM</button>
+                            </div>
                         </div>
                         <p class="mp-copilot-hint">Your Copilot runs the rigs, explains each move, and learns from postmortems.</p>
                     </div>
-                    <div id="mpLlmPanel" class="mp-llm-panel" hidden>
-                        <div class="mp-llm-title">LLM BRIDGE</div>
-                        <div class="mp-llm-grid">
-                            <label>Provider
-                                <select id="mpLlmPreset">
-                                    <option value="openrouter">OpenRouter (has free models)</option>
-                                    <option value="openai">OpenAI</option>
-                                    <option value="local">Local (Ollama / LM Studio)</option>
-                                    <option value="custom">Custom</option>
-                                </select>
-                            </label>
-                            <label>Base URL
-                                <input id="mpLlmBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1" spellcheck="false">
-                            </label>
-                            <label>Model
-                                <input id="mpLlmModel" type="text" placeholder="model id" spellcheck="false">
-                            </label>
-                            <label>API key
-                                <input id="mpLlmKey" type="password" placeholder="sk-..." autocomplete="off">
-                            </label>
-                            <label>
-                                <input id="mpLlmRememberKey" type="checkbox">
-                                Remember key on this device
-                            </label>
+                    <div id="mpCopilotDetails" class="mp-copilot-details" hidden>
+                        <div id="mpCopilotMemoryPanel" class="mp-copilot-memory" role="tabpanel" aria-labelledby="mpCopilotMemory" hidden></div>
+                        <div id="mpLlmPanel" class="mp-llm-panel" role="tabpanel" aria-labelledby="mpLlmAdd" hidden>
+                            <div class="mp-llm-title">LLM BRIDGE</div>
+                            <div class="mp-llm-grid">
+                                <label>Provider
+                                    <select id="mpLlmPreset">
+                                        <option value="openrouter">OpenRouter (has free models)</option>
+                                        <option value="openai">OpenAI</option>
+                                        <option value="local">Local (Ollama / LM Studio)</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                </label>
+                                <label>Base URL
+                                    <input id="mpLlmBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1" spellcheck="false">
+                                </label>
+                                <label>Model
+                                    <input id="mpLlmModel" type="text" placeholder="model id" spellcheck="false">
+                                </label>
+                                <label>API key
+                                    <input id="mpLlmKey" type="password" placeholder="sk-..." autocomplete="off">
+                                </label>
+                                <label>
+                                    <input id="mpLlmRememberKey" type="checkbox">
+                                    Remember key on this device
+                                </label>
+                            </div>
+                            <div class="mp-llm-actions">
+                                <button id="mpLlmEnabled" class="mp-arcade-btn small">Use LLM advisor: OFF</button>
+                                <button id="mpLlmTest" class="mp-arcade-btn small">Test</button>
+                                <button id="mpLlmContextSync" class="mp-arcade-btn small">Sync repo context</button>
+                                <span id="mpLlmContextStatus" class="mp-llm-sync-status">Not synced</span>
+                                <span class="mp-llm-note">Key goes directly to your provider. Use a dedicated, spend-capped key. Leave Remember off on shared devices.</span>
+                            </div>
+                            <div class="mp-llm-note mp-llm-context-note">Loads the repo&rsquo;s curated AGENTS/rules/skills context; it does not upload your key or the full repository.</div>
                         </div>
-                        <div class="mp-llm-actions">
-                            <button id="mpLlmEnabled" class="mp-arcade-btn small">Use LLM advisor: OFF</button>
-                            <button id="mpLlmTest" class="mp-arcade-btn small">Test</button>
-                            <button id="mpLlmContextSync" class="mp-arcade-btn small">Sync repo context</button>
-                            <span id="mpLlmContextStatus" class="mp-llm-sync-status">Not synced</span>
-                            <span class="mp-llm-note">Key goes directly to your provider. Use a dedicated, spend-capped key. Leave Remember off on shared devices.</span>
-                        </div>
-                        <div class="mp-llm-note mp-llm-context-note">Loads the repo&rsquo;s curated AGENTS/rules/skills context; it does not upload your key or the full repository.</div>
                     </div>
+                    <h4 class="mp-copilot-log-title">ACTIVITY</h4>
                     <div id="mpCopilotLog" class="mp-copilot-log">
                         <div class="dim mp-copilot-empty">Autopilot is off. Flip it on and I&rsquo;ll play this round for you, narrating my decisions and why.</div>
                     </div>

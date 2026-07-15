@@ -28,6 +28,8 @@ const STREAK_BONUS = 25;
 const PUBLIC_LOBBY_COUNTDOWN_MS = envDuration('PUBLIC_LOBBY_COUNTDOWN_MS', 10_000);
 const PUBLIC_INTERMISSION_MS = envDuration('PUBLIC_INTERMISSION_MS', 5_000);
 const PUBLIC_EMPTY_GRACE_MS = envDuration('PUBLIC_EMPTY_GRACE_MS', 120_000);
+const PUBLIC_SESSION_RETURN_MS = envDuration('PUBLIC_SESSION_RETURN_MS', 20_000);
+const PUBLIC_SESSION_LENGTH = 5;
 // Separates this calibrated, textured simulation from legacy research rows.
 const SIMULATION_VERSION = 'mainnet-texture-v2';
 
@@ -69,6 +71,8 @@ function createPlayer(id, name, isBot = false, kind = null) {
     kind,
     blocksMined: 0,
     score: 0,
+    sessionBlocksMined: 0,
+    sessionScore: 0,
     streak: 0,
     bestStreak: 0,
   };
@@ -111,6 +115,13 @@ class Room {
     this.objective = null;
     this.lastResult = null;
     this.shadow = null;
+    this.sessionId = crypto.randomBytes(8).toString('hex');
+    this.sessionRound = 1;
+    this.sessionLength = PUBLIC_SESSION_LENGTH;
+    this.sessionResults = [];
+    this.sessionComplete = false;
+    this.sessionSummary = null;
+    this.sessionReturnDeadline = null;
   }
 
   addClient(playerId, ws, name) {
@@ -171,7 +182,9 @@ class Room {
     if (player) {
       player.connected = false;
       // No score yet — nothing to preserve for a reconnect, drop the ghost entry.
-      if (!player.score && !player.blocksMined) this.players.delete(playerId);
+      if (!player.score && !player.blocksMined && !player.sessionScore && !player.sessionBlocksMined) {
+        this.players.delete(playerId);
+      }
     }
     this.lastActiveAt = Date.now();
 
@@ -205,6 +218,7 @@ class Room {
         return { ok: false, error: 'Room privacy can only change while waiting for a challenge' };
       }
       this.listed = settings.listed;
+      if (this.listed) this._startNewPublicSession();
       this.reconcileLifecycle();
     }
     if (settings.variantMode !== undefined) {
@@ -243,6 +257,8 @@ class Room {
         name: p.name,
         score: p.score,
         blocksMined: p.blocksMined,
+        sessionScore: p.sessionScore,
+        sessionBlocksMined: p.sessionBlocksMined,
         streak: p.streak,
         bestStreak: p.bestStreak,
         connected: p.connected,
@@ -267,6 +283,8 @@ class Room {
     const pointsEarned = POINTS_PER_BLOCK + streakBonus;
     miner.score += pointsEarned;
     miner.blocksMined += 1;
+    miner.sessionScore += pointsEarned;
+    miner.sessionBlocksMined += 1;
     miner.bestStreak = Math.max(miner.bestStreak, miner.streak);
 
     // Reset other players' personal streaks.
@@ -282,6 +300,7 @@ class Room {
   }
 
   discoveryState() {
+    if (this.sessionComplete) return 'session_complete';
     if (this.running) return 'live';
     if (this.roundOver) return 'between_rounds';
     if (this.challenge) return 'paused';
@@ -290,6 +309,47 @@ class Room {
 
   connectedHumanCount() {
     return [...this.players.values()].filter((player) => player.connected && !player.isBot).length;
+  }
+
+  hasSoloControl(playerId) {
+    if (!this.listed || this.connectedHumanCount() !== 1) return false;
+    const player = this.players.get(playerId);
+    return !!player && player.connected && !player.isBot;
+  }
+
+  sessionState(forPlayerId = null) {
+    if (!this.listed) {
+      return {
+        sessionId: null,
+        sessionRound: null,
+        sessionLength: null,
+        sessionComplete: false,
+        sessionReturnDeadline: null,
+        sessionResults: [],
+        sessionSummary: null,
+        controlMode: 'host',
+        canSoloControl: false,
+      };
+    }
+    const solo = this.connectedHumanCount() === 1;
+    return {
+      sessionId: this.sessionId,
+      sessionRound: this.sessionRound,
+      sessionLength: this.sessionLength,
+      sessionComplete: this.sessionComplete,
+      sessionReturnDeadline: this.sessionReturnDeadline,
+      sessionResults: this.sessionResults.map((entry) => ({
+        round: entry.sessionRound,
+        challengeId: entry.challenge?.id || null,
+        challengeName: entry.challenge?.name || 'Challenge',
+        success: !!entry.success,
+        variantLabel: entry.challenge?.variantLabel || '',
+        assignmentMode: entry.assignmentMode === 'manual' ? 'manual' : 'randomized',
+      })),
+      sessionSummary: this.sessionSummary,
+      controlMode: solo ? 'solo' : 'auto',
+      canSoloControl: forPlayerId ? this.hasSoloControl(forPlayerId) : false,
+    };
   }
 
   lifecycleState(now = Date.now()) {
@@ -316,6 +376,9 @@ class Room {
         ? { label: challenge.variantLabel, classification: challenge.assignmentMode }
         : null,
       height: this.height,
+      sessionRound: this.sessionRound,
+      sessionLength: this.sessionLength,
+      sessionComplete: this.sessionComplete,
       progress: {
         currentBlock: this.height,
         durationBlocks: challenge?.durationBlocks || null,
@@ -358,6 +421,7 @@ class Room {
         : null,
       lastResult: this.lastResult,
       ...this.lifecycleState(),
+      ...this.sessionState(forPlayerId),
     };
   }
 
@@ -376,17 +440,25 @@ class Room {
   }
 
   start(playerId) {
-    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can start' };
     if (this.running) return { ok: true };
-    if (this.listed && this.connectedHumanCount() === 0) {
-      return { ok: false, error: 'At least one connected player is required' };
+    if (this.listed) {
+      if (!this.hasSoloControl(playerId)) {
+        return { ok: false, error: 'Public controls require exactly one connected human' };
+      }
+      if (this.sessionComplete) return { ok: false, error: 'This five-challenge session is complete' };
+      if (this.challenge && !this.roundOver) return this._resumeChallengeAtomic();
+      return this.roundOver ? this._nextChallengeAtomic() : this._startChallengeAtomic();
     }
-
+    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can start' };
     return this.roundOver ? this._nextChallengeAtomic() : this._startChallengeAtomic();
   }
 
   nextChallenge(playerId) {
-    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
+    if (this.listed && !this.hasSoloControl(playerId)) {
+      return { ok: false, error: 'Public controls require exactly one connected human' };
+    }
+    if (!this.listed && playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
+    if (this.listed && this.sessionComplete) return { ok: false, error: 'This five-challenge session is complete' };
     if (this.listed && this.running) return { ok: true };
     if (this.running) return { ok: false, error: 'A challenge is already running' };
     if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
@@ -408,6 +480,7 @@ class Room {
     this.objective = null;
     this.shadow = null;
     this.lastResult = null;
+    if (this.listed) this.sessionRound = Math.min(this.sessionLength, this.sessionResults.length + 1);
     this._resetScoresAndChain(true);
     return this._startChallengeAtomic();
   }
@@ -427,6 +500,17 @@ class Room {
     });
     // Give players a beat to read the mission card before blocks start.
     this.scheduleNext(4000);
+    return { ok: true };
+  }
+
+  _resumeChallengeAtomic() {
+    if (this.running) return { ok: true };
+    if (!this.challenge || this.roundOver) return { ok: false, error: 'No paused challenge to resume' };
+    this._clearLifecycleTimer();
+    this.running = true;
+    this.broadcast({ type: 'status', message: 'Race resumed', running: true });
+    this.broadcastState();
+    this.scheduleNext(200);
     return { ok: true };
   }
 
@@ -494,19 +578,45 @@ class Room {
   }
 
   stop(playerId = null) {
-    if (playerId && playerId !== this.hostId) return { ok: false, error: 'Only the host can stop' };
-    if (playerId && this.listed) return { ok: false, error: 'Public rounds cannot be paused' };
+    if (playerId && this.listed && !this.hasSoloControl(playerId)) {
+      return { ok: false, error: 'Public pause requires exactly one connected human' };
+    }
+    if (playerId && !this.listed && playerId !== this.hostId) {
+      return { ok: false, error: 'Only the host can stop' };
+    }
+    if (playerId && this.listed && (!this.running || !this.challenge || this.roundOver)) {
+      return { ok: false, error: 'Only an active public challenge can be paused' };
+    }
     this.running = false;
     this._clearBlockTimer();
     this._clearLifecycleTimer();
-    this.broadcast({ type: 'status', message: 'Race paused', running: false });
+    this.broadcast({
+      type: 'status',
+      message: this.listed ? 'Solo control paused the race' : 'Race paused',
+      running: false,
+    });
     this.broadcastState();
     return { ok: true };
   }
 
   reset(playerId) {
+    if (this.listed) {
+      if (!this.hasSoloControl(playerId)) {
+        return { ok: false, error: 'Public abandon requires exactly one connected human' };
+      }
+      if (!this.challenge || this.roundOver || this.sessionComplete) {
+        return { ok: false, error: 'No active public round to abandon' };
+      }
+      this._resetPublicToWaiting();
+      this.broadcast({
+        type: 'status',
+        message: `Challenge ${this.sessionRound} abandoned — no research datapoint recorded; replaying this slot`,
+        running: false,
+      });
+      this._beginLifecycleCountdown('lobby', PUBLIC_LOBBY_COUNTDOWN_MS);
+      return { ok: true };
+    }
     if (playerId !== this.hostId) return { ok: false, error: 'Only the host can reset' };
-    if (this.listed) return { ok: false, error: 'Public rounds cannot be abandoned' };
     this.roundOver = false;
     this.winnerId = null;
     this._removeBots();
@@ -541,6 +651,19 @@ class Room {
     }
   }
 
+  _startNewPublicSession() {
+    this.sessionId = crypto.randomBytes(8).toString('hex');
+    this.sessionRound = 1;
+    this.sessionResults = [];
+    this.sessionComplete = false;
+    this.sessionSummary = null;
+    this.sessionReturnDeadline = null;
+    for (const player of this.players.values()) {
+      player.sessionScore = 0;
+      player.sessionBlocksMined = 0;
+    }
+  }
+
   finishChallenge() {
     this.running = false;
     this.roundOver = true;
@@ -557,6 +680,9 @@ class Room {
       selectedVariant: this.challenge.variant.id,
       mvpName: mvp?.name || null,
       humans: humans.length,
+      sessionId: this.listed ? this.sessionId : null,
+      sessionRound: this.listed ? this.sessionRound : null,
+      sessionLength: this.listed ? this.sessionLength : null,
     };
 
     recordRound({
@@ -571,18 +697,86 @@ class Room {
       selectedVariant: this.challenge.variant.id,
       humans: humans.length,
       blocks: this.height,
+      sessionId: this.listed ? this.sessionId : null,
+      sessionRound: this.listed ? this.sessionRound : null,
+      sessionLength: this.listed ? this.sessionLength : null,
       ...result,
     });
 
-    if (this.listed && this.connectedHumanCount() > 0) {
-      this._beginLifecycleCountdown('intermission', PUBLIC_INTERMISSION_MS);
+    if (this.listed) {
+      this.sessionResults.push(this.lastResult);
+      if (this.sessionResults.length >= this.sessionLength) {
+        this.sessionComplete = true;
+        this.sessionSummary = this._buildSessionSummary();
+        this.sessionReturnDeadline = Date.now() + PUBLIC_SESSION_RETURN_MS;
+        if (this.connectedHumanCount() > 0) {
+          this._beginLifecycleCountdown('session_end', PUBLIC_SESSION_RETURN_MS);
+        }
+      } else if (this.connectedHumanCount() > 0) {
+        this._beginLifecycleCountdown('intermission', PUBLIC_INTERMISSION_MS);
+      }
     }
     this.broadcast({
       type: 'round_result',
       result: this.lastResult,
       leaderboard: this.leaderboard(),
     });
+    if (this.sessionComplete) {
+      this.broadcast({
+        type: 'session_complete',
+        summary: this.sessionSummary,
+        returnDeadline: this.sessionReturnDeadline,
+      });
+    }
     this.broadcastState();
+  }
+
+  _buildSessionSummary() {
+    const results = this.sessionResults.slice(0, this.sessionLength);
+    const scoredBlocks = results.reduce((sum, entry) => sum + (Number(entry.scoredBlocks) || 0), 0);
+    const weightedBt = results.reduce(
+      (sum, entry) => sum + (Number(entry.meanBt) || 0) * (Number(entry.scoredBlocks) || 0),
+      0
+    );
+    const classifications = results.reduce((counts, entry) => {
+      const key = entry.assignmentMode === 'manual' ? 'exploratory' : 'official';
+      counts[key] += 1;
+      return counts;
+    }, { official: 0, exploratory: 0 });
+    const contributions = [...this.players.values()]
+      .filter((player) => !player.isBot)
+      .map((player) => ({
+        id: player.id,
+        name: player.name,
+        score: player.sessionScore || 0,
+        blocksMined: player.sessionBlocksMined || 0,
+        connected: player.connected,
+      }))
+      .sort((a, b) => b.score - a.score || b.blocksMined - a.blocksMined || a.name.localeCompare(b.name));
+    return {
+      sessionId: this.sessionId,
+      sessionLength: this.sessionLength,
+      objectivesDefended: results.filter((entry) => entry.success).length,
+      classifications,
+      results: results.map((entry) => ({
+        round: entry.sessionRound,
+        challengeId: entry.challenge?.id || null,
+        challengeName: entry.challenge?.name || 'Challenge',
+        verdict: entry.success ? 'NETWORK DEFENDED' : 'NETWORK DEGRADED',
+        success: !!entry.success,
+        variantLabel: entry.challenge?.variantLabel || '',
+        assignmentMode: entry.assignmentMode === 'manual' ? 'manual' : 'randomized',
+      })),
+      health: {
+        meanBt: scoredBlocks ? Number((weightedBt / scoredBlocks).toFixed(1)) : 0,
+        orphans: results.reduce((sum, entry) => sum + (Number(entry.orphans) || 0), 0),
+        deepestReorg: Math.max(0, ...results.map((entry) => Number(entry.deepestReorg) || 0)),
+        longestWait: Math.max(0, ...results.map((entry) => Number(entry.worstGap) || 0)),
+        difficultySwing: Number(Math.max(1, ...results.map((entry) => Number(entry.diffSwing) || 1)).toFixed(2)),
+      },
+      contributions,
+      note: 'Each challenge recorded one independent research datapoint; this session summary is not an additional datapoint.',
+    };
   }
 
   /**
@@ -674,6 +868,8 @@ class Room {
       if (victim) {
         victim.score = Math.max(0, victim.score - (dead.pointsEarned || 0));
         victim.blocksMined = Math.max(0, victim.blocksMined - 1);
+        victim.sessionScore = Math.max(0, victim.sessionScore - (dead.pointsEarned || 0));
+        victim.sessionBlocksMined = Math.max(0, victim.sessionBlocksMined - 1);
       }
     }
 
@@ -710,6 +906,8 @@ class Room {
     if (attacker) {
       attacker.score += depth * POINTS_PER_BLOCK;
       attacker.blocksMined += depth;
+      attacker.sessionScore += depth * POINTS_PER_BLOCK;
+      attacker.sessionBlocksMined += depth;
     }
     // Streaks don't survive a rewrite; the shadow algo now owns the tip.
     for (const player of this.players.values()) player.streak = 0;
@@ -786,8 +984,15 @@ class Room {
       this._clearLifecycleTimer();
       return;
     }
-    if (this.connectedHumanCount() === 0 || this.running) {
+    const humans = this.connectedHumanCount();
+    if (humans === 0 || this.running) {
       this._clearLifecycleTimer();
+      return;
+    }
+    if (this.sessionComplete) {
+      const remaining = Math.max(0, (this.sessionReturnDeadline || Date.now()) - Date.now());
+      if (remaining === 0) this._endPublicSession();
+      else if (this.lifecycleKind !== 'session_end') this._beginLifecycleCountdown('session_end', remaining);
       return;
     }
     if (this.roundOver) {
@@ -802,9 +1007,9 @@ class Room {
       }
       return;
     }
-    // Public rooms never remain host-paused.
-    this._resetPublicToWaiting();
-    this._beginLifecycleCountdown('lobby', PUBLIC_LOBBY_COUNTDOWN_MS);
+    // A solo pilot may pause. As soon as multiplayer resumes, the server
+    // restarts the block loop so a newly joined player cannot inherit a stall.
+    if (humans > 1) this._resumeChallengeAtomic();
   }
 
   _beginLifecycleCountdown(kind, durationMs) {
@@ -824,6 +1029,8 @@ class Room {
         this._startChallengeAtomic();
       } else if (kind === 'intermission' && !this.running && this.roundOver) {
         this._nextChallengeAtomic();
+      } else if (kind === 'session_end' && this.sessionComplete) {
+        this._endPublicSession();
       }
     }, durationMs);
     this.broadcastState();
@@ -847,6 +1054,10 @@ class Room {
     this.roundOver = false;
     this._clearBlockTimer();
     this._clearLifecycleTimer();
+    for (const player of this.players.values()) {
+      player.sessionScore = Math.max(0, player.sessionScore - player.score);
+      player.sessionBlocksMined = Math.max(0, player.sessionBlocksMined - player.blocksMined);
+    }
     this._removeBots();
     this.challenge = null;
     this.objective = null;
@@ -861,12 +1072,28 @@ class Room {
     this._clearLifecycleTimer();
     if (!wasRoundOver) this._resetPublicToWaiting();
     this._clearEmptyRoomTimer();
-    this.emptyRoomDeadline = Date.now() + PUBLIC_EMPTY_GRACE_MS;
+    const sessionRemaining = this.sessionComplete && this.sessionReturnDeadline
+      ? Math.max(0, this.sessionReturnDeadline - Date.now())
+      : PUBLIC_EMPTY_GRACE_MS;
+    const expiryMs = Math.min(PUBLIC_EMPTY_GRACE_MS, sessionRemaining);
+    this.emptyRoomDeadline = Date.now() + expiryMs;
     this.emptyRoomTimer = setTimeout(() => {
       this.emptyRoomTimer = null;
       this.emptyRoomDeadline = null;
       if (this.connectedHumanCount() === 0 && this.onEmptyExpired) this.onEmptyExpired(this);
-    }, PUBLIC_EMPTY_GRACE_MS);
+    }, expiryMs);
+  }
+
+  _endPublicSession() {
+    if (!this.listed || !this.sessionComplete) return;
+    this._clearBlockTimer();
+    this._clearLifecycleTimer();
+    this.broadcast({
+      type: 'session_ended',
+      sessionId: this.sessionId,
+      message: 'Five-challenge session complete — returning to lobby',
+    });
+    if (this.onEmptyExpired) this.onEmptyExpired(this);
   }
 
   _clearEmptyRoomTimer() {
@@ -939,6 +1166,8 @@ module.exports = {
   PUBLIC_LOBBY_COUNTDOWN_MS,
   PUBLIC_INTERMISSION_MS,
   PUBLIC_EMPTY_GRACE_MS,
+  PUBLIC_SESSION_RETURN_MS,
+  PUBLIC_SESSION_LENGTH,
   sanitizePlayerName,
   generateCallsign,
 };

@@ -231,11 +231,8 @@ const LLMBridge = (function () {
     btn.classList.toggle('primary', isActive());
   }
 
-  function setPanelOpen(open) {
-    const panel = el('mpLlmPanel');
-    const btn = el('mpLlmAdd');
-    if (panel) panel.hidden = !open;
-    if (btn) btn.setAttribute('aria-expanded', String(open));
+  function requestPanelOpen() {
+    document.dispatchEvent(new CustomEvent('copilot:select-pane', { detail: { pane: 'llm' } }));
   }
 
   function clearFieldError(fieldId) {
@@ -246,7 +243,7 @@ const LLMBridge = (function () {
   }
 
   function showConfigurationIssue(issue) {
-    setPanelOpen(true);
+    requestPanelOpen();
     const input = el(issue.fieldId);
     if (input) {
       input.setCustomValidity(issue.message);
@@ -371,11 +368,6 @@ const LLMBridge = (function () {
       saveSettings();
     }
 
-    el('mpLlmAdd')?.addEventListener('click', () => {
-      const panel = el('mpLlmPanel');
-      setPanelOpen(panel?.hidden === true);
-    });
-
     el('mpLlmPreset')?.addEventListener('change', (e) => {
       settings.preset = e.target.value;
       const preset = PRESETS[settings.preset];
@@ -453,14 +445,6 @@ const LLMBridge = (function () {
           : 'LLM advisor disabled — Copilot will continue without model calls.',
         settings.enabled ? 'llm' : 'sys'
       );
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && !el('mpLlmPanel')?.hidden) {
-        setPanelOpen(false);
-        el('mpLlmAdd')?.focus();
-        return;
-      }
     });
 
     fillForm();
