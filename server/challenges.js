@@ -69,15 +69,20 @@ const CHALLENGE_FACTORIES = [
   function algoHopper(rng) {
     const start = Math.floor(rng() * 4);
     const schedule = [{ at: 0, hashrates: {} }];
-    for (let i = 0; i < 6; i++) {
+    // One 20-block cycle per lane: 12 blocks farming the difficulty floor,
+    // then 8 blocks dark while the rig relocates. The rest gap is what lets
+    // difficulty (and mean block time) partially recover between hops —
+    // a rig that never leaves some lane keeps the whole chain hot forever.
+    for (let i = 0; i < 4; i++) {
       const algo = (start + i) % 4;
-      schedule.push({ at: 15 + i * 10, hashrates: { [algo]: 450 } });
+      schedule.push({ at: 15 + i * 20, hashrates: { [algo]: 275 } });
+      schedule.push({ at: 15 + i * 20 + 12, hashrates: {} });
     }
     return {
       id: 'hopper',
       name: 'ALGO HOPPER',
       brief: 'A nomad miner rotates rented hash across all four algorithms, farming each difficulty floor before moving on. Stop any single algo from dominating the chain.',
-      durationBlocks: 85,
+      durationBlocks: 95,
       scoredFromBlock: 15,
       objective: {
         type: 'dominance',
@@ -110,6 +115,33 @@ const CHALLENGE_FACTORIES = [
     };
   },
 
+  function shadowMiner(rng) {
+    const algo = Math.floor(rng() * 4);
+    return {
+      id: 'shadow',
+      name: 'SHADOW MINER',
+      brief: `A selfish miner is secretly stacking a hidden ${ALGO_NAMES[algo]} chain to rewrite history. Push that lane's difficulty up to slow the hidden rig — if its chain reaches 3 blocks it will erase yours.`,
+      durationBlocks: 90,
+      scoredFromBlock: 10,
+      objective: {
+        type: 'reorg',
+        maxDepth: 2,
+        label: 'Keep the deepest chain rewrite at 2 blocks or less',
+      },
+      // Hidden-chain parameters: the attacker mines algo `algo` off-chain with
+      // `power`, reveals at `revealAt` shadow blocks (forced reveal at stopAt
+      // if it holds at least minReveal). Expected hidden blocks per public
+      // block ≈ power / (4 × visible lane power), so stacking defenders'
+      // hash on the lane starves the rig; `staleAfter` dry blocks in a row
+      // cost it one hidden block (the honest chain pulls ahead).
+      shadow: { algo, power: 150, startAt: 18, stopAt: 75, revealAt: 3, minReveal: 2, staleAfter: 4 },
+      bots: [
+        noiseBot(),
+        { name: 'SHADOW RIG', kind: 'attacker', schedule: [{ at: 0, hashrates: {} }] },
+      ],
+    };
+  },
+
   function goldRush() {
     return {
       id: 'goldrush',
@@ -128,7 +160,12 @@ const CHALLENGE_FACTORIES = [
 ];
 
 function drawChallenge(rng) {
-  const factory = CHALLENGE_FACTORIES[Math.floor(rng() * CHALLENGE_FACTORIES.length)];
+  let factory = CHALLENGE_FACTORIES[Math.floor(rng() * CHALLENGE_FACTORIES.length)];
+  // Debug/testing hook: FORCE_CHALLENGE=shadow npm start pins the draw.
+  if (process.env.FORCE_CHALLENGE) {
+    const forced = CHALLENGE_FACTORIES.find((f) => f(rng).id === process.env.FORCE_CHALLENGE);
+    if (forced) factory = forced;
+  }
   const challenge = factory(rng);
   challenge.variant = VARIANTS[Math.floor(rng() * VARIANTS.length)];
   return challenge;
@@ -144,6 +181,8 @@ function publicChallenge(challenge) {
     objectiveLabel: challenge.objective.label,
     variantId: challenge.variant.id,
     variantLabel: challenge.variant.label,
+    // The brief names the shadow lane anyway; expose it so the client can aim.
+    shadowAlgo: challenge.shadow ? challenge.shadow.algo : null,
   };
 }
 
@@ -169,13 +208,34 @@ class ObjectiveTracker {
     this.recentWinners = [];
     this.worstShare = 0;
     this.currentShare = 0;
+    this.orphans = 0;
+    this.deepestReorg = 0;
+    // Chain-health extras over the scored window: the single worst block gap
+    // (sim seconds) and per-lane difficulty extremes for the swing ratio.
+    this.worstGap = 0;
+    this.diffMin = {};
+    this.diffMax = {};
+  }
+
+  noteReorg(depth) {
+    this.deepestReorg = Math.max(this.deepestReorg, depth);
   }
 
   addBlock(block) {
+    if (block.orphan) this.orphans += 1;
     if (block.penaltyMultiplier > 1) this.penaltyEvents += 1;
     if (block.height < this.challenge.scoredFromBlock) return;
     this.scoredBlocks += 1;
     this.btSum += block.blockTime;
+    this.worstGap = Math.max(this.worstGap, block.blockTime);
+
+    // Per-lane difficulty extremes (from telemetry) for the swing ratio.
+    for (const t of block.telemetry || []) {
+      const d = Number(t.difficulty);
+      if (!Number.isFinite(d) || d <= 0) continue;
+      if (this.diffMin[t.algo] === undefined || d < this.diffMin[t.algo]) this.diffMin[t.algo] = d;
+      if (this.diffMax[t.algo] === undefined || d > this.diffMax[t.algo]) this.diffMax[t.algo] = d;
+    }
 
     this.recentBts.push(block.blockTime);
     if (this.recentBts.length > BT_WINDOW) this.recentBts.shift();
@@ -206,9 +266,27 @@ class ObjectiveTracker {
     return this.scoredBlocks > 0 ? this.btSum / this.scoredBlocks : 0;
   }
 
+  /** Worst peak-to-trough difficulty ratio across lanes in the scored window. */
+  diffSwing() {
+    let worst = 1;
+    for (const algo of Object.keys(this.diffMax)) {
+      if (this.diffMin[algo] > 0) worst = Math.max(worst, this.diffMax[algo] / this.diffMin[algo]);
+    }
+    return worst;
+  }
+
   /** Progress snapshot for the HUD: value climbs toward 1 when on track. */
   progress() {
     const obj = this.challenge.objective;
+    if (obj.type === 'reorg') {
+      return {
+        type: obj.type,
+        value: this.deepestReorg,
+        target: obj.maxDepth,
+        ok: this.deepestReorg <= obj.maxDepth,
+        label: `DEEPEST REWRITE ${this.deepestReorg} · LIMIT ${obj.maxDepth}`,
+      };
+    }
     if (obj.type === 'dominance') {
       return {
         type: obj.type,
@@ -229,15 +307,38 @@ class ObjectiveTracker {
 
   evaluate() {
     const obj = this.challenge.objective;
-    const success = obj.type === 'dominance'
-      ? this.maxShare() <= obj.maxShare
-      : this.stability() >= obj.threshold;
+    let success;
+    let verdictLabel;
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    if (obj.type === 'reorg') {
+      success = this.deepestReorg <= obj.maxDepth;
+      verdictLabel = success
+        ? `DEEPEST REWRITE ${this.deepestReorg} — LIMIT ${obj.maxDepth}`
+        : `CHAIN REWRITTEN ${this.deepestReorg} DEEP — LIMIT ${obj.maxDepth}`;
+    } else if (obj.type === 'dominance') {
+      success = this.maxShare() <= obj.maxShare;
+      verdictLabel = success
+        ? `SHARE HELD BELOW ${pct(obj.maxShare)} — PEAK ${pct(this.maxShare())}`
+        : `SHARE PEAKED AT ${pct(this.maxShare())} — LIMIT ${pct(obj.maxShare)}`;
+    } else {
+      success = this.stability() >= obj.threshold;
+      verdictLabel = success
+        ? `STABILITY ${pct(this.stability())} — NEEDED ${pct(obj.threshold)}`
+        : `STABILITY ${pct(this.stability())} — BELOW ${pct(obj.threshold)}`;
+    }
     return {
       success,
+      // Which metric actually decided the verdict; everything else is context.
+      objectiveType: obj.type,
+      verdictLabel,
       stability: Number(this.stability().toFixed(4)),
       maxShare: Number(this.maxShare().toFixed(4)),
       meanBt: Number(this.meanBt().toFixed(1)),
       penaltyEvents: this.penaltyEvents,
+      orphans: this.orphans,
+      deepestReorg: this.deepestReorg,
+      worstGap: this.worstGap,
+      diffSwing: Number(this.diffSwing().toFixed(2)),
       scoredBlocks: this.scoredBlocks,
     };
   }

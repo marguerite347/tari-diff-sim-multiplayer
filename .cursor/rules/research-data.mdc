@@ -1,0 +1,32 @@
+---
+description: Research data schema stability rules for challenges, variants, objectives, and round recording
+globs: server/challenges.js,server/research.js
+alwaysApply: false
+---
+
+# Research data integrity
+
+Every finished round appends one JSON line to `data/rounds.jsonl` (`recordRound`) and `/api/research` aggregates them per `challenge::variant` (`aggregate()` in `research.js`). Data collected by the community accumulates across code versions, so the schema is effectively **append-only**.
+
+## Schema rules
+
+- Round entries currently carry: `ts`, `room`, `challenge`, `challengeName`, `variant`, `variantLabel`, `humans`, `blocks`, plus the `ObjectiveTracker.evaluate()` fields (`success`, `stability`, `maxShare`, `meanBt`, `penaltyEvents`, `orphans`, `deepestReorg`, `scoredBlocks`).
+- You may **add** fields (make `aggregate()` default them for old rows, as it already does with `|| 0`). Never rename, remove, or change the meaning/units of existing fields.
+- Never reuse a retired challenge or variant `id` for something different — old rows would be aggregated into the wrong bucket.
+- `aggregate()` must tolerate rows from older versions (missing fields, unknown challenge ids).
+
+## Objective types
+
+`ObjectiveTracker` supports exactly three `objective.type` values, each with its own success test and HUD `progress()` shape:
+
+- `stability` — fraction of scored blocks whose trailing-15 mean block time is within 0.7×–1.5× of the 120s target; success when `stability() >= threshold`.
+- `dominance` — max algo share in any trailing-20 window; success when `maxShare() <= maxShare`.
+- `reorg` — deepest chain rewrite reported via `noteReorg(depth)`; success when `deepestReorg <= maxDepth`.
+
+Adding a new type means updating `progress()`, `evaluate()`, and the clients that render `objective.label` — prefer reusing an existing type if it fits.
+
+## Adding a challenge or variant
+
+- New challenge: add a factory to `CHALLENGE_FACTORIES` returning `{ id, name, brief, durationBlocks, scoredFromBlock, objective, bots }` (plus optional `shadow` config for selfish mining). Use the passed `rng`, never `Math.random()`. Keep `publicChallenge` in sync if you add fields the client needs. Test with `FORCE_CHALLENGE=<id> npm start`. See `skills/add-challenge/SKILL.md`.
+- New variant: add to `VARIANTS` (`{ id, label, windowSize, penalty }`). Note `drawChallenge` picks variants uniformly — every new variant dilutes rounds available per config, which slows research convergence; a meaningful comparison needs many rounds per (challenge, variant) cell. See `skills/add-network-variant/SKILL.md`.
+- Never commit `data/` — it's gitignored community research output.

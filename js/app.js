@@ -27,6 +27,7 @@ const App = (function() {
         // Block Race is the default view — run the simulator warm-up silently
         // in the background instead of blocking the page with the overlay.
         loading.style.display = 'none';
+        initTabs();
 
         setTimeout(async () => {
             try {
@@ -37,14 +38,18 @@ const App = (function() {
                 simulationData = await runSimulationsWithProgress(currentScenarios, currentBaseSeed, true);
             } catch (error) {
                 loading.style.display = 'flex';
-                loading.innerHTML = `<div class="error">Error: ${error.message}<br><pre>${error.stack}</pre></div>`;
+                const errorBox = document.createElement('div');
+                const stack = document.createElement('pre');
+                errorBox.className = 'error';
+                errorBox.append(document.createTextNode(`Error: ${error.message}`), document.createElement('br'), stack);
+                stack.textContent = error.stack || String(error);
+                loading.replaceChildren(errorBox);
                 return;
             }
 
             initializeSelectedScenarios();
             initScenarioCheckboxes();
             initAlgoSelector();
-            initTabs();
             initZoomBars();
             initSettingsBar();
             initTrialSections();
@@ -57,29 +62,18 @@ const App = (function() {
         }, INIT_DELAY_MS);
     }
 
-    function showTab(tabId) {
-        document.querySelectorAll('.tab-button').forEach(tab => {
-            tab.classList.toggle('active', tab.dataset.tab === tabId);
-        });
-        document.querySelectorAll('.tab-content').forEach(content => {
-            content.classList.toggle('active', content.id === tabId);
-        });
-    }
-
-
     // --- Simulation runner ---
 
-    async function runSimulationsWithProgress(scenarios, baseSeed) {
+    async function runSimulationsWithProgress(scenarios, baseSeed, silent = false) {
         const loading = document.getElementById('loading');
         const loadingText = document.getElementById('loadingText');
-        const roomParam = new URLSearchParams(location.search).get('room');
-        if (!roomParam) loading.style.display = 'flex';
+        if (!silent) loading.style.display = 'flex';
 
         const result = await Simulation.runAllAsync(blocks, scenarios, (current, total) => {
-            if (!roomParam) loadingText.textContent = `Running simulations... ${current}/${total} scenarios`;
+            if (!silent) loadingText.textContent = `Running simulations... ${current}/${total} scenarios`;
         }, baseSeed);
 
-        if (!roomParam) loadingText.textContent = 'Rendering...';
+        if (!silent) loadingText.textContent = 'Rendering...';
         return result;
     }
 
@@ -168,9 +162,18 @@ const App = (function() {
                 button.classList.add('active');
                 const tabId = button.dataset.tab;
                 document.getElementById(tabId).classList.add('active');
+                syncGameViewClass(tabId);
                 renderTabCharts(tabId);
             });
         });
+
+        const activeTab = document.querySelector('.tab-button.active');
+        if (activeTab) syncGameViewClass(activeTab.dataset.tab);
+    }
+
+    // Hides simulator-only chrome (header, settings bar, footer) on the game view.
+    function syncGameViewClass(tabId) {
+        document.body.classList.toggle('game-view', tabId === 'tab-multiplayer');
     }
 
 
@@ -342,6 +345,7 @@ const App = (function() {
     // --- Tab chart rendering ---
 
     function renderTabCharts(tabId) {
+        if (!simulationData) return; // still warming up in the background
         switch (tabId) {
             case 'tab-baseline':
                 Charts.renderBaselineBlockTimesOverall(blocks, simulationData.warmup);

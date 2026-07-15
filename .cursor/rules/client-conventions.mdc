@@ -1,0 +1,18 @@
+---
+description: Client-side conventions for the multiplayer HUD, Three.js battlefield, Copilot, and solo simulator
+globs: js/**,css/**,index.html
+alwaysApply: false
+---
+
+# Client conventions
+
+- **Plain JS, no build step.** Every client file is an IIFE module attached to `window` (`window.Multiplayer`, `window.Battlefield`, `window.Copilot`, …) and loaded by a `<script>` tag in `index.html`. Load order matters: `lib/three.min.js` before `battlefield.js`, `agent.js` before `multiplayer.js`. New files must be added to `index.html` manually.
+- **Vendored libs only**: Three.js r149 and Chart.js live in `lib/`. Don't add npm client packages, module bundlers, or ESM imports.
+- Files are served statically by the Node server — verify client changes by refreshing http://localhost:8787 (server restart not needed).
+- **Guard cross-module calls**: modules may load in any state, so call siblings defensively (`if (window.Battlefield) Battlefield.reset()` — this is the existing pattern in `multiplayer.js`).
+- **UPPERCASE arcade copy**: ticker lines, toasts, objective/status text, and challenge names are uppercase military/arcade voice (`ENEMY INBOUND — HOSTILE FORCES MASSING ON SHA3X`). Copilot log lines are the exception: sentence-case first-person narration.
+- **Escape user strings**: player names and any server-echoed text go through `escapeHtml` before `innerHTML` (see `multiplayer.js`).
+- The four algos are always ordered `['RandomXM', 'Sha3x', 'RandomXT', 'Cuckaroo']` with lane colors `[0xff4d5e, 0x37b6ff, 0x3dffa2, 0xffb640]` — keep every per-algo array in that order.
+- CSS: multiplayer styles use the `mp-` prefix in `css/style.css`; solo-simulator styles are unprefixed. Keep that separation.
+- `js/lwma.js`, `js/simulation.js`, `js/app.js`, etc. are the original **solo** simulator — `js/lwma.js` is an exact port of Tari's Rust LWMA; don't alter its math. `js/data.js` is a one-line mainnet snapshot; don't reformat it.
+- Don't commit `assets/skyboxes/` (~1.6 GB, untracked). The battlefield loads skyboxes from `assets/skyboxes/manifest.json` at runtime and must degrade gracefully when it's missing.

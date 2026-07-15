@@ -48,6 +48,10 @@ npm start
 - Round results append to `data/rounds.jsonl`; aggregates are served from `/api/research`.
 - Windows are re-seeded to difficulty equilibrium for the opening power mix each round, so scores measure attack response rather than warm-up drift.
 
+## For AI agents
+
+Contributing with a coding agent (Cursor, Claude Code, Codex, …)? Point it at **[AGENTS.md](AGENTS.md)** — project map, how to run and verify, simulation invariants, and PR expectations. Step-by-step recipes for the most valuable contributions (new challenges, network variants, battlefield visuals, Copilot tuning) live in **[skills/](skills/)**. Humans: see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Solo research UI
 
 All original tabs still work (baseline, block-time comparison, validation, etc.). Open `index.html` via the Node server (needed for multiplayer WebSocket); solo charts are unchanged.

@@ -1,0 +1,29 @@
+---
+description: Simulation invariants for the server-side LWMA engine, game loop, and challenge scoring
+globs: server/**
+alwaysApply: false
+---
+
+# Server simulation invariants
+
+This server generates **research data** comparing Tari network configs. Correctness of the simulation matters more than any feature. Restart the server after edits (no hot reload) and play a full round to verify.
+
+## Never break
+
+- **LWMA feedback loop**: solve rate is `rate = hashrate / targetDifficulty` (`computeAlgoRates` in `engine.js`). Power shifts → difficulty response → rate change. Never bypass with fixed block times, fixed winners, or difficulty caps outside `LwmaWindow`.
+- **`LwmaWindow.calculate` is an exact BigInt port of Tari's Rust LWMA** (`base_layer/core/src/proof_of_work/lwma_diff.rs`). Don't float-ify, simplify, or "fix" the integer math, the 6× solve-time clamp, or the linear weighting.
+- **120s overall target**: four algos × 480s per-algo `targetTime` (`ALGO_CONFIG`). `TARGET_BT = 120` in `challenges.js` scores against it.
+- **Equilibrium seeding**: `_armChallenge` in `room.js` calls `seedWindowsForPower` so the round opens at difficulty equilibrium for the starting power mix. Rounds must measure attack response, not warm-up drift.
+- **Reproducible PRNG**: all simulation randomness goes through the room's `mulberry32` instance (`this.rng`) — including challenge factories, orphan sampling, and the shadow miner's Poisson sampler. No `Math.random()` in simulation paths.
+- **TIP-004 penalty semantics**: consecutive same-algo wins double the algo's target time per streak step (`applyPenalty`, `PENALTY_BASE = 2n`). Whether it's on is decided by the drawn challenge **variant**, never by the host mid-round (`setSettings` deliberately refuses once a challenge is armed).
+
+## Game-loop facts to respect
+
+- `Room.scheduleNext` is the only block producer; it applies bot schedules (`_applyBotSchedules`) *after* each block and runs the shadow miner (`_shadowStep`) after broadcasting.
+- Blocks broadcast full per-algo `telemetry` (difficulty, penalty, share) — clients chart it and the Copilot reads it. Removing fields breaks clients silently.
+- Reorgs (`_revealShadow`) splice the chain, claw back points, and set `consecutiveCount` so TIP-004 punishes the attacker post-reveal. Report reorg depth via `objective.noteReorg`.
+- Debug hooks: `FORCE_CHALLENGE=<id>` pins the challenge draw; `ORPHAN_WINDOW=<seconds>` (default 8) tunes orphan frequency.
+
+## Research data (see also research-data rule)
+
+`recordRound` fields written in `Room.finishChallenge` are a stable, append-only schema consumed by `aggregate()` in `research.js` and by every previously collected `data/rounds.jsonl`. Add fields; never rename/repurpose. Never commit `data/`.

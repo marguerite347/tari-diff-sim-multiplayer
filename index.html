@@ -4,22 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tari Difficulty Algorithm Simulation</title>
+    <link rel="icon" href="data:,">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
     <script src="lib/chart.min.js"></script>
 </head>
-<body>
-    <div class="header">
+<body class="game-view">
+    <div class="header sim-only">
+        <p class="sim-lab-kicker">&#9656; Research Lab</p>
         <h1>Tari Difficulty Algorithm Simulation</h1>
         <p class="subtitle">
             Mining competition simulation: LWMA + TIP-004 penalty
-            &mdash; solo historical replay <strong>or</strong> shareable multiplayer rooms
+            &mdash; batch LWMA window-size sweeps over historical mainnet data
         </p>
     </div>
 
-    <div class="settings-bar">
+    <div class="settings-bar sim-only">
         <label>Min Window: <input type="number" id="minWindow" value="30" min="10" max="90"></label>
         <label>Max Window: <input type="number" id="maxWindow" value="60" min="10" max="120"></label>
         <label>Step: <input type="number" id="stepWindow" value="5" min="1" max="30"></label>
@@ -27,7 +29,7 @@
         <button id="rerandomize" class="run-btn rerandomize-btn">Re-randomize Seeds</button>
     </div>
 
-    <div id="loading" class="loading-overlay">
+    <div id="loading" class="loading-overlay" style="display:none">
         <div class="spinner"></div>
         <p id="loadingText">Running simulations...</p>
     </div>
@@ -44,6 +46,31 @@
 
     <div id="tab-multiplayer" class="tab-content active mp-arcade">
         <div class="mp-scanlines" aria-hidden="true"></div>
+
+        <div id="mpTutorial" class="mp-victory" hidden>
+            <div class="mp-victory-card mp-tutorial-card">
+                <button id="mpTutorialClose" class="mp-tutorial-close" aria-label="Close tutorial">&times;</button>
+                <p class="mp-title-kicker">Pilot briefing</p>
+                <h2 class="mp-victory-logo">HOW TO PLAY</h2>
+                <ol class="mp-tutorial-steps">
+                    <li><strong>Suit up.</strong> Enter a callsign, then create a new game or join with a friend&rsquo;s room code. The host hits START to launch a round.</li>
+                    <li><strong>Read the mission HUD.</strong> Every round a scripted attacker messes with the network. Your objective stays at the top: keep block times stable, or keep any one algo below its share limit.</li>
+                    <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
+                    <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and white helmet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
+                    <li><strong>Or let the Copilot fly.</strong> Autopilot can play the round for you — it explains every move in its log and learns from past rounds.</li>
+                    <li><strong>You&rsquo;re doing science.</strong> Each finished round records a datapoint comparing the status-quo network config vs the proposed one — see the research panel at the bottom.</li>
+                </ol>
+                <section id="mpScoringHelp" class="mp-scoring-help" tabindex="-1" aria-labelledby="mpScoringTitle">
+                    <h3 id="mpScoringTitle">HOW YOU WIN</h3>
+                    <p>Each challenge has one scored <strong>network objective</strong> on the mission card and top HUD: a stability threshold, algo-share limit, or maximum reorg depth.</p>
+                    <p>The room wins or loses together based only on that objective at round end. Result stats marked <strong>SCORED</strong> decide the verdict; mean block time, orphans, longest wait, difficulty swing, and other health stats are research context unless marked.</p>
+                    <p>Personal points and MVP are separate: mined blocks earn points, consecutive wins add streak bonuses, and reorged-away blocks can have their points clawed back. They never override the network verdict.</p>
+                </section>
+                <div class="mp-tutorial-actions">
+                    <button id="mpTutorialGotIt" class="mp-arcade-btn primary">Got it</button>
+                </div>
+            </div>
+        </div>
 
         <div id="mpLobby" class="mp-title-screen">
             <div class="mp-title-glow" aria-hidden="true"></div>
@@ -62,6 +89,7 @@
             <div class="mp-title-buttons">
                 <button id="mpCreate" class="mp-arcade-btn primary">&#9654; New game</button>
                 <button id="mpJoin" class="mp-arcade-btn">Join game</button>
+                <button id="mpHelpLobby" class="mp-arcade-btn">? How to play</button>
             </div>
             <p class="mp-insert-coin">— every round is a random network challenge · your play becomes Tari research data —</p>
             <p class="mp-conn-line">Link: <span id="mpConnStatus">Idle</span> <span id="mpStatus"></span></p>
@@ -74,6 +102,7 @@
                 <div class="mp-victory-card">
                     <p class="mp-title-kicker" id="mpVictoryKicker">Round complete</p>
                     <h2 id="mpVictoryTitle" class="mp-victory-logo">WINNER</h2>
+                    <p id="mpVictoryVerdict" class="mp-victory-verdict" hidden></p>
                     <p id="mpVictorySub"></p>
                     <div id="mpVictoryStats" class="mp-result-stats"></div>
                     <button id="mpVictoryDismiss" class="mp-arcade-btn primary">Continue</button>
@@ -88,6 +117,7 @@
                         <span id="mpChallengeVariant" class="mp-variant-chip"></span>
                     </p>
                     <p id="mpChallengeObjective" class="mp-challenge-objective"></p>
+                    <p class="mp-challenge-scoring">Meet this objective at round end. Stats marked SCORED decide the result.</p>
                     <button id="mpChallengeGo" class="mp-arcade-btn primary">Deploy rigs</button>
                 </div>
             </div>
@@ -97,6 +127,7 @@
                 <div class="mp-hud-cell">
                     <span class="mp-hud-label">Room</span>
                     <span class="mp-hud-value mp-code" id="mpRoomLabel">—</span>
+                    <a id="mpDebugLink" class="mp-debug-link" href="#" target="_blank" rel="noopener" title="Open room debug snapshot (JSON) — paste it to a debugging agent">DEBUG</a>
                 </div>
                 <div class="mp-hud-cell">
                     <span class="mp-hud-label">Status</span>
@@ -111,6 +142,8 @@
                     <div class="mp-race-bar"><div id="mpRaceFill" class="mp-race-fill"></div></div>
                 </div>
                 <div class="mp-hud-cell mp-hud-actions">
+                    <button id="mpHelp" class="mp-arcade-btn small" title="How to play">?</button>
+                    <button id="mpScoringButton" class="mp-arcade-btn small" title="How scoring works">SCORING ?</button>
                     <button id="mpCopyLink" class="mp-arcade-btn small">Invite</button>
                     <button id="mpLeave" class="mp-arcade-btn small danger">Quit</button>
                 </div>
@@ -121,13 +154,15 @@
             <div class="mp-battlefield" id="mpBattlefield">
                 <div class="mp-bf-overlay">
                     <div class="mp-bf-height" id="mpBfHeight">BLOCK 0</div>
-                    <div class="mp-bf-status" id="mpBfStatus">ARMIES ARE ASSEMBLING</div>
+                    <div class="mp-bf-status" id="mpBfStatus" hidden></div>
                 </div>
+                <div class="mp-ticker" id="mpTicker" aria-live="polite"></div>
                 <div class="mp-bf-legend">
                     <span style="--lane:#ff4d5e">RandomXM</span>
                     <span style="--lane:#37b6ff">Sha3x</span>
                     <span style="--lane:#3dffa2">RandomXT</span>
                     <span style="--lane:#ffb640">Cuckaroo</span>
+                    <span class="mp-bf-vocab" title="How to read the battlefield">army color = algo &middot; <em class="warning">black + warning horn</em> = attacker &middot; <em class="mine">white diamond</em> = you &middot; wall height = difficulty &middot; ghost blocks = hidden chain</span>
                 </div>
                 <div class="mp-bf-hint">drag to orbit · scroll to zoom · double-click to auto-spin</div>
             </div>
@@ -155,7 +190,7 @@
                         </label>
                     </div>
                     <div id="mpHostControls" class="mp-host-grid">
-                        <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="120"></label>
+                        <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="30"></label>
                         <span class="mp-host-note">Window &amp; TIP-004 penalty are dealt by the challenge draw — that&rsquo;s the experiment.</span>
                     </div>
                     <div class="mp-deck-buttons">
@@ -171,7 +206,39 @@
                     <div class="mp-copilot-head">
                         <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot: OFF</button>
                         <button id="mpCopilotMemory" class="mp-arcade-btn small">Memory</button>
+                        <button id="mpLlmBrain" class="mp-arcade-btn small">Brain: HEURISTIC</button>
+                        <button id="mpLlmGear" class="mp-arcade-btn small" title="LLM bridge settings">&#9881;</button>
                         <span class="mp-copilot-hint">The agent runs your rigs, explains every move, and learns from each postmortem.</span>
+                    </div>
+                    <div id="mpLlmPanel" class="mp-llm-panel" hidden>
+                        <div class="mp-llm-title">LLM BRIDGE</div>
+                        <div class="mp-llm-grid">
+                            <label>Provider
+                                <select id="mpLlmPreset">
+                                    <option value="openrouter">OpenRouter (has free models)</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="local">Local (Ollama / LM Studio)</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                            </label>
+                            <label>Base URL
+                                <input id="mpLlmBaseUrl" type="text" placeholder="https://openrouter.ai/api/v1" spellcheck="false">
+                            </label>
+                            <label>Model
+                                <input id="mpLlmModel" type="text" placeholder="model id" spellcheck="false">
+                            </label>
+                            <label>API key
+                                <input id="mpLlmKey" type="password" placeholder="sk-..." autocomplete="off">
+                            </label>
+                            <label>
+                                <input id="mpLlmRememberKey" type="checkbox">
+                                Remember key on this device
+                            </label>
+                        </div>
+                        <div class="mp-llm-actions">
+                            <button id="mpLlmTest" class="mp-arcade-btn small">Test</button>
+                            <span class="mp-llm-note">Key goes directly to your provider. Use a dedicated, spend-capped key. Leave Remember off on shared devices.</span>
+                        </div>
                     </div>
                     <div id="mpCopilotLog" class="mp-copilot-log">
                         <div class="dim mp-copilot-empty">Autopilot is off. Flip it on and I&rsquo;ll play this round for you, narrating my decisions and why.</div>
@@ -321,7 +388,7 @@
         <div id="validationPanel"></div>
     </div>
 
-    <div class="footer">
+    <div class="footer sim-only">
         <p>Data extracted via gRPC from local Tari node. LWMA verified against <code>lwma_diff.rs</code> (Tari Rust source). Mining competition: all 4 algos race in parallel, winner sampled from P(i) = (hashRate_i / targetDiff_i) / &Sigma;(hashRate_j / targetDiff_j). PRNG: xoshiro128**.</p>
         <p>Algorithms: RandomXM (0), Sha3x (1), RandomXT (2), Cuckaroo (3). Target time: 480s/algo (2 min overall). Just download and open index.html &mdash; no server needed.</p>
     </div>
@@ -337,6 +404,7 @@
     <script src="js/app.js"></script>
     <script src="lib/three.min.js"></script>
     <script src="js/battlefield.js"></script>
+    <script src="js/llmbridge.js"></script>
     <script src="js/agent.js"></script>
     <script src="js/multiplayer.js"></script>
 </body>

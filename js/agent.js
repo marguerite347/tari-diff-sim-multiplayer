@@ -50,7 +50,110 @@ const Copilot = (function () {
   let profileId = 'balanced';
   let roundKey = null;         // "<challengeId>::<variantId>" for the active round
 
+  // --- LLM advisory layer (optional, via window.LLMBridge) ---
+  // The heuristics above stay the always-on reflex layer; when the bridge is
+  // active the model is consulted at a few key moments (~3-6 calls/round) and
+  // its validated guidance is BLENDED into — never substituted for — the
+  // heuristic decision. All safety rails (per-algo max, budget, step
+  // rounding) apply unchanged.
+  const LLM_MAX_TACTICAL_CALLS = 4;
+  let llmGuidance = null;      // last validated {weights,totalPower} advice
+  let llmTacticalCalls = 0;
+  let lastField = null;        // compact field summary for tactical prompts
+
   function init(hooks) { api = hooks; }
+
+  function llmActive() {
+    return typeof window !== 'undefined' && window.LLMBridge?.isActive();
+  }
+
+  function llmSystemPrompt() {
+    return [
+      'You are the strategy brain of a mining copilot in a Tari network defense game.',
+      'The network has 4 proof-of-work algos: RandomXM(0), Sha3x(1), RandomXT(2), Cuckaroo(3). Each algo has its own LWMA difficulty that adapts to the hashrate pointed at it: more hash -> difficulty rises -> that lane slows; hash leaving a lane strands its difficulty high and blocks stall there. Network target is one block every 120s across all algos. TIP-004 (when active) penalizes an algo that wins several blocks in a row by multiplying its difficulty.',
+      'Objective types: "stability" = keep mean block time near 120s; "dominance" = keep every single algo\'s share of recent blocks below a limit; "reorg" = a shadow miner builds a hidden chain on one algo — keep that algo\'s difficulty high to starve it and prevent a reorg.',
+      'A scripted attacker adds/removes outside hashrate. Good play: avoid pouring hash into attacked (surging) lanes, refill lanes with stranded difficulty, dilute a dominant algo by boosting the weak ones.',
+      'Your player controls 4 rigs, 0-300 power each (steps of 10), sensible total 40-400.',
+      'Respond with STRICT JSON only, no prose, exactly this shape:',
+      '{"weights":[w0,w1,w2,w3],"totalPower":n,"profileBias":"hardCounter|balanced|lightTouch","say":"one short paragraph of in-character tactical narration"}',
+      'weights are relative allocation across the 4 algos (any positive numbers, they get normalized). totalPower is your suggested total (40-400). profileBias picks the reflex layer\'s aggression. say is what you tell the pilot.',
+    ].join('\n');
+  }
+
+  function llmNarrate(say) {
+    if (say) api.log(`[LLM] ${say}`, 'llm');
+  }
+
+  /** Brief-time consultation: strategy guidance from challenge + memory. */
+  function llmConsultBrief(challenge, entry) {
+    const key = roundKey;
+    const memLines = Object.entries(entry.profiles || {})
+      .filter(([, s]) => s.plays > 0)
+      .map(([id, s]) => `${id}: ${s.wins}/${s.plays} wins, avg stability ${s.plays ? Math.round((s.stabilitySum / s.plays) * 100) : 0}%`);
+    const prompt = [
+      `New round. Challenge: ${challenge.name} (id ${challenge.id}). Config: ${challenge.variantLabel} (${challenge.variantId === 'lwma90' ? 'slow LWMA-90 window, NO TIP-004 penalty' : 'fast LWMA-45 window, TIP-004 penalty active'}).`,
+      challenge.shadowAlgo != null ? `Shadow miner targets algo ${challenge.shadowAlgo}.` : '',
+      memLines.length ? `My memory on this exact challenge+config (${entry.plays} past plays):\n${memLines.join('\n')}` : 'No memory of this challenge+config yet.',
+      entry.lessons?.length ? `Lessons from past rounds:\n${entry.lessons.join('\n')}` : '',
+      'Give me opening guidance as strict JSON per the contract.',
+    ].filter(Boolean).join('\n');
+
+    window.LLMBridge.requestGuidance(llmSystemPrompt(), prompt).then((g) => {
+      if (!g || !enabled || roundKey !== key) return; // stale or round over — drop silently
+      if (g.profileBias && PROFILES[g.profileBias]) {
+        profileId = g.profileBias;
+        profile = PROFILES[profileId];
+        api.log(`[LLM] Advisor overrides profile to ${profile.label} for this round.`, 'llm');
+      }
+      if (g.weights || g.totalPower != null) {
+        llmGuidance = { weights: g.weights, totalPower: g.totalPower };
+      }
+      llmNarrate(g.say);
+    });
+  }
+
+  /** Tactical consultation on major attack transitions (budget-capped). */
+  function llmConsultTactical(reason) {
+    if (!llmActive() || llmTacticalCalls >= LLM_MAX_TACTICAL_CALLS || !lastField) return;
+    llmTacticalCalls += 1;
+    const key = roundKey;
+    const f = lastField;
+    const prompt = [
+      `Mid-round update at block ${f.height}: ${reason}`,
+      `Objective: ${f.objective || 'none'}${f.objectiveOk === false ? ' (currently FAILING)' : ''}.`,
+      `Per-algo outside power surge vs round baseline: [${f.surges.join(', ')}].`,
+      `Attacked lanes: [${f.attacked.join(', ')}]. Stranded-difficulty lanes: [${f.stranded.join(', ')}]. TIP-004-penalized lanes: [${f.penalized.join(', ')}].`,
+      `Recent win share per algo: [${f.shares.join(', ')}]. My current allocation: [${f.mine.join(', ')}].`,
+      'Update your guidance as strict JSON per the contract.',
+    ].join('\n');
+
+    window.LLMBridge.requestGuidance(llmSystemPrompt(), prompt).then((g) => {
+      if (!g || !enabled || roundKey !== key) return;
+      if (g.weights || g.totalPower != null) {
+        llmGuidance = { weights: g.weights, totalPower: g.totalPower };
+      }
+      llmNarrate(g.say);
+    });
+  }
+
+  /** Round-end consultation: ask the model to write the stored lesson. */
+  function llmConsultPostmortem(result, usedProfileId, key) {
+    const prompt = [
+      `Round over: ${result.success ? 'WON' : 'LOST'}. Profile used: ${usedProfileId}.`,
+      `Stats: stability ${Math.round((result.stability || 0) * 100)}%, mean block time ${result.meanBt}s (target 120s), top algo share ${Math.round((result.maxShare || 0) * 100)}%, ${result.penaltyEvents} TIP-004 penalties. Config: ${result.challenge?.variantLabel}.`,
+      'Write a one-sentence lesson for my memory in "say" (what to keep or change next time on this challenge). Strict JSON per the contract; weights/totalPower/profileBias may be null.',
+    ].join('\n');
+
+    window.LLMBridge.requestGuidance(llmSystemPrompt(), prompt).then((g) => {
+      if (!g?.say) return;
+      const lesson = `[LLM] ${g.say.slice(0, 240)}`;
+      const { memory, entry } = memoryFor(key);
+      entry.lessons.push(lesson);
+      if (entry.lessons.length > 5) entry.lessons.shift();
+      saveMemory(memory);
+      llmNarrate(`Postmortem lesson saved: ${g.say.slice(0, 240)}`);
+    });
+  }
 
   // --- Memory (persists across sessions in this browser) ---
 
@@ -140,6 +243,9 @@ const Copilot = (function () {
     base = null;
     lastActHeight = -99;
     lastAttackKey = '';
+    llmGuidance = null;
+    llmTacticalCalls = 0;
+    lastField = null;
     if (!enabled || !api) return;
 
     // Consult memory of past rounds on this challenge + config combo.
@@ -153,6 +259,10 @@ const Copilot = (function () {
       api.log(`Memory check: I have played ${challenge.name} under this config ${entry.plays} time${entry.plays === 1 ? '' : 's'} before. ${entry.lessons.length ? `Last lesson: ${entry.lessons[entry.lessons.length - 1]}` : ''}`, 'sys');
     }
     api.log(`Strategy: ${profile.label} (${profile.desc}) — ${choice.why}.`, 'plan');
+
+    // Optional LLM consultation (async — heuristic plan above stands until
+    // validated guidance arrives; on any failure nothing changes).
+    if (llmActive()) llmConsultBrief(challenge, entry);
 
     const parts = [`Mission accepted: ${challenge.name} under ${challenge.variantLabel}.`];
     if (challenge.variantId === 'lwma90') {
@@ -170,18 +280,32 @@ const Copilot = (function () {
       case 'whiplash':
         parts.push('Expecting burst waves on one algo. I will lean against each wave: back off while it mines, refill the crater when it vanishes.');
         break;
+      case 'shadow':
+        parts.push(`A selfish miner is building a hidden ${ALGO[challenge.shadowAlgo] ?? ''} chain. My plan: pile hash onto that lane to drive its difficulty up and starve the hidden rig, while keeping the other lanes alive so no reorg window opens.`);
+        break;
       default:
         parts.push('No scripted attacker — my job is simply to keep block production smooth while everyone chases points.');
     }
     api.log(parts.join(' '), 'plan');
 
-    // Opening stance: even spread hedges against an unknown target.
-    const opening = { 0: 30, 1: 30, 2: 30, 3: 30 };
-    applyAlloc(opening, 'Opening stance: 30 power on each algo — a hedge until the attacker shows their hand.');
+    // Opening stance: even spread hedges against an unknown target — except
+    // against a shadow miner, where the counter is loading its lane early.
+    if (challenge.id === 'shadow' && challenge.shadowAlgo != null) {
+      const opening = { 0: 25, 1: 25, 2: 25, 3: 25 };
+      opening[challenge.shadowAlgo] = 150;
+      applyAlloc(opening, `Opening stance: 150 power on ${ALGO[challenge.shadowAlgo]} to inflate its difficulty before the hidden rig gets traction, 25 everywhere else to deny streaks.`);
+    } else {
+      const opening = { 0: 30, 1: 30, 2: 30, 3: 30 };
+      applyAlloc(opening, 'Opening stance: 30 power on each algo — a hedge until the attacker shows their hand.');
+    }
   }
 
   function onBlock(state, block) {
     if (!enabled || !api || !state || !block?.telemetry) return;
+
+    if (block.orphan?.minerId === state.you) {
+      api.log(`Tough luck: our ${ALGO[block.orphan.algo]} block was found almost simultaneously with the winner and got orphaned — no points, that's just propagation physics. Strategy unchanged.`, 'alert');
+    }
 
     const me = (state.players || []).find((p) => p.id === state.you);
     if (!me) return;
@@ -228,7 +352,23 @@ const Copilot = (function () {
       }
     }
 
+    // Keep a compact field summary for LLM tactical prompts.
+    lastField = {
+      height: block.height,
+      objective: objective ? `${objective.type} (${objective.label})` : null,
+      objectiveOk: objective?.ok,
+      surges: surges.map((s) => Math.round(s)),
+      attacked: attacked.map((a, i) => (a ? ALGO[i] : null)).filter(Boolean),
+      stranded: stranded.map((s, i) => (s ? ALGO[i] : null)).filter(Boolean),
+      penalized: penalized.map((p, i) => (p ? ALGO[i] : null)).filter(Boolean),
+      shares: shares.map((s) => `${Math.round(s * 100)}%`),
+      mine: mine,
+    };
+
     const mustAct = attackKey !== lastAttackKey;
+    if (mustAct && lastAttackKey !== '' && llmActive()) {
+      llmConsultTactical('the attack pattern just shifted (surge appeared/vanished or a lane went stranded)');
+    }
     lastAttackKey = attackKey;
     if (!mustAct && block.height - lastActHeight < profile.cooldown) return;
 
@@ -240,6 +380,11 @@ const Copilot = (function () {
       for (let i = 0; i < 4; i++) weights[i] = 1 / Math.max(shares[i], 0.06);
       const top = shares.indexOf(Math.max(...shares));
       reasons.push(`objective is dominance (${objective.label.toLowerCase()}), so I weight power toward the weakest lanes to dilute ${ALGO[top]}`);
+    }
+    const shadowAlgo = state.challenge?.shadowAlgo;
+    if (objective?.type === 'reorg' && shadowAlgo != null) {
+      weights[shadowAlgo] *= 3.5;
+      reasons.push(`keeping ${ALGO[shadowAlgo]} difficulty inflated — every point of difficulty there slows the hidden chain`);
     }
     for (let i = 0; i < 4; i++) {
       if (attacked[i]) {
@@ -276,11 +421,24 @@ const Copilot = (function () {
       }
     }
 
+    // --- Blend in LLM guidance (advisory only — rails still apply) ---
+    let finalWeights = weights;
+    if (llmGuidance) {
+      if (llmGuidance.weights) {
+        const hSum = weights.reduce((a, b) => a + b, 0);
+        finalWeights = weights.map((w, i) => 0.5 * (w / hSum) + 0.5 * llmGuidance.weights[i]);
+        reasons.push('blending in the LLM advisor\u2019s lane weighting');
+      }
+      if (llmGuidance.totalPower != null) {
+        targetTotal = clamp((targetTotal + llmGuidance.totalPower) / 2, 40, profile.budget);
+      }
+    }
+
     // --- Build allocation ---
-    const wSum = weights.reduce((a, b) => a + b, 0);
+    const wSum = finalWeights.reduce((a, b) => a + b, 0);
     const alloc = {};
     for (let i = 0; i < 4; i++) {
-      alloc[i] = Math.round((targetTotal * weights[i] / wSum) / STEP) * STEP;
+      alloc[i] = Math.round((targetTotal * finalWeights[i] / wSum) / STEP) * STEP;
       alloc[i] = Math.min(PER_ALGO_MAX, Math.max(0, alloc[i]));
     }
 
@@ -291,6 +449,31 @@ const Copilot = (function () {
     const desc = `Block ${block.height}: reallocating to ${[0, 1, 2, 3].map((i) => `${ALGO[i]} ${alloc[i]}`).join(' · ')}${objNote}. ${sentence(reasons)}`;
     applyAlloc(alloc, desc);
     lastActHeight = block.height;
+  }
+
+  /** Narration for orphan/shadow events (also fires when autopilot is on mid-round). */
+  function onShadow(state, msg) {
+    if (!enabled || !api) return;
+    if (msg.fizzled) {
+      api.log('The shadow miner abandoned its hidden chain — our difficulty wall on that lane starved it out. Holding position until the round ends.', 'plan');
+      return;
+    }
+    if (msg.stale) {
+      api.log(`Good sign: the honest chain out-paced the hidden rig — its stack slipped to ${msg.count}. The pressure on ${ALGO[msg.algo]} is working.`, 'plan');
+      return;
+    }
+    const urgency = msg.count >= 2 ? ' One more and it can rewrite the chain — piling more hash onto that lane now.' : '';
+    api.log(`Warning: the hidden ${ALGO[msg.algo]} chain grew to ${msg.count} block${msg.count === 1 ? '' : 's'}.${urgency}`, 'alert');
+    if (msg.count >= 2 && currentAlloc && msg.algo != null) {
+      const alloc = { 0: currentAlloc[0], 1: currentAlloc[1], 2: currentAlloc[2], 3: currentAlloc[3] };
+      alloc[msg.algo] = Math.min(PER_ALGO_MAX, (alloc[msg.algo] || 0) + 60);
+      applyAlloc(alloc, `Emergency surge: +60 power to ${ALGO[msg.algo]} to spike its difficulty while the shadow chain sits one block from reveal.`);
+    }
+  }
+
+  function onReorg(state, msg) {
+    if (!enabled || !api) return;
+    api.log(`REORG: the shadow miner revealed ${msg.depth} hidden blocks and rewrote the chain — points on the orphaned blocks were clawed back. ${msg.depth > 2 ? 'That was a deep cut; the objective is likely lost unless we stop the next one.' : 'Still inside the objective limit — do not let it happen again.'} Re-inflating ${ALGO[msg.algo]} difficulty.`, 'alert');
   }
 
   function onResult(result) {
@@ -316,6 +499,9 @@ const Copilot = (function () {
 
     const record = `${stats.wins}/${stats.plays}`;
     api.log(`Postmortem saved: "${lesson}" ${PROFILES[profileId].label} is now ${record} on this combo. I'll use this next time the same challenge and config come up.`, 'sys');
+
+    // Optional LLM postmortem — its lesson lands in the same memory (async).
+    if (llmActive()) llmConsultPostmortem(result, profileId, roundKey);
     roundKey = null;
   }
 
@@ -349,7 +535,7 @@ const Copilot = (function () {
     return unique[0].charAt(0).toUpperCase() + unique.join('; ').slice(1) + '.';
   }
 
-  return { init, setEnabled, isEnabled, onBrief, onBlock, onResult, memoryReport };
+  return { init, setEnabled, isEnabled, onBrief, onBlock, onResult, onShadow, onReorg, memoryReport };
 })();
 
 if (typeof window !== 'undefined') window.Copilot = Copilot;

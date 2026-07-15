@@ -1,5 +1,10 @@
 node_modules/
 data/
+# Full skybox library is too large for git; a curated subset ships separately.
+assets/skyboxes/
+assets/Screenshot_*
+skyboxes.html
+.playwright-cli/
 .DS_Store
 .env
 .vercel

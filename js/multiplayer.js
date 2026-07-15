@@ -8,15 +8,21 @@ const Multiplayer = (function () {
   const ALGO_NAMES = ['RandomXM', 'Sha3x', 'RandomXT', 'Cuckaroo'];
   const SLIDER_MAX = 300;
 
+  const TUTORIAL_KEY = 'tariTutorialSeen.v1';
+  const SESSION_KEY = 'tariPlayerSession.v1';
+
   let ws = null;
   let playerId = null;
   let roomState = null;
   let statusMessage = '';
   let toastTimer = null;
+  let copilotAutoEngaged = false;
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${proto}//${location.host}/ws`;
+    let resume = '';
+    try { resume = localStorage.getItem(SESSION_KEY) || ''; } catch { /* storage unavailable */ }
+    return `${proto}//${location.host}/ws${resume ? `?resume=${encodeURIComponent(resume)}` : ''}`;
   }
 
   function connect() {
@@ -47,11 +53,17 @@ const Multiplayer = (function () {
     switch (msg.type) {
       case 'hello':
         playerId = msg.playerId;
+        if (msg.resumeToken) {
+          try { localStorage.setItem(SESSION_KEY, msg.resumeToken); } catch { /* storage unavailable */ }
+        }
+        // A fresh socket means any previous room membership is gone server-side.
+        roomState = null;
         maybeAutoJoin();
         break;
       case 'room_state':
         roomState = msg;
         if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
+        if (window.Battlefield && msg.shadow) Battlefield.setShadowCount(msg.shadow.count, msg.shadow.algo);
         render();
         if (msg.roundOver && msg.lastResult) showResult(msg.lastResult);
         else hideVictory();
@@ -64,6 +76,11 @@ const Multiplayer = (function () {
         }
         hideVictory();
         showChallengeCard(msg.challenge);
+        if (window.Battlefield && window.Battlefield.nextSkybox) Battlefield.nextSkybox();
+        if (window.Battlefield) Battlefield.reset();
+        showBattlefieldEvent(`ATTACK INBOUND — ${msg.challenge?.name || 'UNKNOWN'}`, true, 4500);
+        resetStoryState();
+        ticker(`NEW CHALLENGE: ${msg.challenge?.name || 'UNKNOWN'} — DEFEND THE NETWORK`, 'sys');
         renderStatusLamp();
         if (window.Copilot) Copilot.onBrief(msg.challenge, roomState);
         break;
@@ -83,7 +100,44 @@ const Multiplayer = (function () {
         renderRaceTrack();
         updateLiveStats();
         celebrateBlock(msg.block);
+        narrateBlock(msg.block);
         if (window.Copilot) Copilot.onBlock(roomState, msg.block);
+        break;
+      case 'shadow_block':
+        if (window.Battlefield) Battlefield.setShadowCount(msg.count, msg.algo);
+        ticker(
+          msg.stale
+            ? `THE HONEST CHAIN PULLS AHEAD — SHADOW STACK SLIPS TO ${msg.count}`
+            : `SOMETHING STIRS — A HIDDEN ${(msg.algoName || '').toUpperCase()} BLOCK JOINS THE SHADOW STACK (${msg.count})`,
+          msg.stale ? 'good' : 'bad'
+        );
+        if (window.Copilot) Copilot.onShadow?.(roomState, msg);
+        break;
+      case 'shadow_fizzle':
+        if (window.Battlefield) Battlefield.setShadowCount(0);
+        ticker('THE SHADOW MINER GIVES UP — HIDDEN CHAIN ABANDONED', 'good');
+        if (window.Copilot) Copilot.onShadow?.(roomState, { ...msg, fizzled: true });
+        break;
+      case 'reorg':
+        if (roomState) {
+          if (msg.leaderboard) roomState.players = msg.leaderboard;
+          if (msg.objective) roomState.objective = msg.objective;
+          const depth = Math.max(0, Number(msg.depth) || 0);
+          roomState.recentBlocks = (roomState.recentBlocks || [])
+            .slice(0, Math.max(0, (roomState.recentBlocks || []).length - depth))
+            .concat(msg.newBlocks || [])
+            .slice(-40);
+        }
+        if (window.Battlefield) Battlefield.reorgEvent(msg.depth, msg.algo);
+        ticker(`SHADOW CHAIN REVEALED — ${msg.depth} BLOCK${msg.depth === 1 ? '' : 'S'} REWRITTEN BY ${(msg.attackerName || 'THE ATTACKER').toUpperCase()}`, 'bad');
+        showBattlefieldEvent(`REORG DEPTH ${msg.depth}`, true);
+        showToast(`REORG DEPTH ${msg.depth} — HISTORY REWRITTEN`, 'bad');
+        renderLeaderboard();
+        renderRaceTrack();
+        updateLiveStats();
+        const feed = document.getElementById('mpBlockFeed');
+        if (feed) feed.innerHTML = (roomState?.recentBlocks || []).slice().reverse().map(blockCard).join('');
+        if (window.Copilot) Copilot.onReorg?.(roomState, msg);
         break;
       case 'round_result':
         if (roomState) {
@@ -93,6 +147,7 @@ const Multiplayer = (function () {
           if (msg.leaderboard) roomState.players = msg.leaderboard;
         }
         hideChallengeCard();
+        showBattlefieldEvent(msg.result?.success ? 'ATTACK REPELLED' : 'NETWORK DEGRADED', !msg.result?.success, 4500);
         showResult(msg.result);
         loadResearch();
         render();
@@ -105,6 +160,18 @@ const Multiplayer = (function () {
         renderStatusLamp();
         break;
       case 'error':
+        // A join against a room the server no longer knows (usually wiped by a
+        // restart) should drop the stale ?room= link, not leave a zombie UI.
+        if (!roomState && /room not found/i.test(msg.error || '')) {
+          statusMessage = 'ROOM NO LONGER EXISTS ON THE SERVER — IT WAS LIKELY LOST IN A RESTART. CREATE A NEW ROOM.';
+          if (new URLSearchParams(location.search).get('room')) {
+            history.replaceState({}, '', location.pathname);
+          }
+          renderStatus();
+          showToast(statusMessage, 'bad');
+          render();
+          break;
+        }
         statusMessage = msg.error || 'Error';
         renderStatus();
         showToast(statusMessage, 'warn');
@@ -201,29 +268,90 @@ const Multiplayer = (function () {
       document.getElementById('mpCopilotToggle')?.addEventListener('click', () => {
         const next = !Copilot.isEnabled();
         Copilot.setEnabled(next, roomState);
-        const btn = document.getElementById('mpCopilotToggle');
-        if (btn) {
-          btn.textContent = `Autopilot: ${next ? 'ON' : 'OFF'}`;
-          btn.classList.toggle('primary', next);
-        }
+        renderCopilotToggle(next);
       });
       document.getElementById('mpCopilotMemory')?.addEventListener('click', () => {
         copilotLog(`What I've learned so far:\n${Copilot.memoryReport()}`, 'sys');
       });
     }
 
+    if (window.LLMBridge) LLMBridge.initUI({ log: copilotLog });
+
     document.getElementById('mpSpeedup')?.addEventListener('change', () => {
       send({
         type: 'set_settings',
-        settings: { speedup: Number(document.getElementById('mpSpeedup')?.value || 120) },
+        settings: { speedup: Number(document.getElementById('mpSpeedup')?.value || 30) },
       });
     });
 
     document.getElementById('mpChallengeGo')?.addEventListener('click', hideChallengeCard);
 
+    initTutorial();
     connect();
     render();
     loadResearch();
+  }
+
+  // --- First-run tutorial ---
+
+  function initTutorial() {
+    const overlay = document.getElementById('mpTutorial');
+    if (!overlay) return;
+    document.getElementById('mpTutorialClose')?.addEventListener('click', hideTutorial);
+    document.getElementById('mpTutorialGotIt')?.addEventListener('click', hideTutorial);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) hideTutorial();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') hideTutorial();
+    });
+    document.getElementById('mpHelp')?.addEventListener('click', showTutorial);
+    document.getElementById('mpHelpLobby')?.addEventListener('click', showTutorial);
+    document.getElementById('mpScoringButton')?.addEventListener('click', showScoringHelp);
+
+    let seen = false;
+    try { seen = localStorage.getItem(TUTORIAL_KEY) === '1'; } catch { /* storage unavailable */ }
+    if (!seen) showTutorial();
+  }
+
+  function showTutorial() {
+    const overlay = document.getElementById('mpTutorial');
+    if (overlay) overlay.hidden = false;
+  }
+
+  function showScoringHelp() {
+    showTutorial();
+    requestAnimationFrame(() => {
+      const section = document.getElementById('mpScoringHelp');
+      section?.scrollIntoView({ block: 'center' });
+      section?.focus({ preventScroll: true });
+    });
+  }
+
+  function hideTutorial() {
+    const overlay = document.getElementById('mpTutorial');
+    if (!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch { /* storage unavailable */ }
+  }
+
+  // --- Copilot helpers ---
+
+  function renderCopilotToggle(on) {
+    const btn = document.getElementById('mpCopilotToggle');
+    if (!btn) return;
+    btn.textContent = `Autopilot: ${on ? 'ON' : 'OFF'}`;
+    btn.classList.toggle('primary', on);
+  }
+
+  /** Autopilot defaults to ON the first time this player lands in a room. */
+  function engageCopilotByDefault() {
+    if (copilotAutoEngaged || !window.Copilot) return;
+    copilotAutoEngaged = true;
+    if (!Copilot.isEnabled()) {
+      Copilot.setEnabled(true, roomState);
+      renderCopilotToggle(true);
+    }
   }
 
   function copilotLog(text, kind = 'move') {
@@ -297,6 +425,98 @@ const Multiplayer = (function () {
     }
   }
 
+  // --- Story ticker: plain-language narration of network events ---
+
+  const TICKER_MAX = 4;
+
+  function ticker(text, kind = 'sys') {
+    const el = document.getElementById('mpTicker');
+    if (!el) return;
+    const line = document.createElement('div');
+    line.className = `mp-ticker-line ${kind}`;
+    line.textContent = text;
+    el.insertAdjacentElement('afterbegin', line);
+    requestAnimationFrame(() => line.classList.add('in'));
+    while (el.children.length > TICKER_MAX) el.removeChild(el.lastChild);
+    setTimeout(() => {
+      if (line.parentElement === el) {
+        line.classList.add('out');
+        setTimeout(() => line.remove(), 600);
+      }
+    }, 9000);
+  }
+
+  // Per-round wall/difficulty story state: 0 = calm, 1 = wall announced
+  const wallStory = [{}, {}, {}, {}].map(() => ({ baseline: 0, state: 0, strandedTold: false }));
+
+  function resetStoryState() {
+    for (const s of wallStory) {
+      s.baseline = 0;
+      s.state = 0;
+      s.strandedTold = false;
+    }
+    hostilePresence.fill(false);
+  }
+
+  function narrateBlock(block) {
+    if (!block?.telemetry) return;
+    for (const entry of block.telemetry) {
+      const story = wallStory[entry.algo];
+      const diff = Number(entry.difficulty);
+      if (!Number.isFinite(diff) || diff <= 0) continue;
+      if (!story.baseline) { story.baseline = diff; continue; }
+      const ratio = diff / story.baseline;
+      const lanePower = Number(roomState?.totals?.[entry.algo] || 0);
+      const name = ALGO_NAMES[entry.algo].toUpperCase();
+
+      if (story.state === 0 && ratio > 1.5) {
+        story.state = 1;
+        ticker(`${name} WALL RISING — THE EXTRA HASH IS BEING PRICED IN`, 'warn');
+      } else if (story.state === 1 && ratio < 1.2) {
+        story.state = 0;
+        story.strandedTold = false;
+        ticker(`${name} WALL COOLING — DIFFICULTY BACK NEAR BASELINE`, 'good');
+      } else if (story.state === 1 && !story.strandedTold && ratio > 1.5 && lanePower < 60) {
+        story.strandedTold = true;
+        ticker(`MINERS FLED ${name} — ITS TALL WALL NOW LOOMS OVER AN EMPTY LANE`, 'warn');
+      }
+    }
+
+    if (block.orphan) {
+      ticker(`ORPHAN! TWO BLOCKS FOUND AT ONCE — ${(block.orphan.algoName || '').toUpperCase()}'S BLOCK CRUMBLES`, 'warn');
+    }
+    if (block.penaltyMultiplier > 1) {
+      ticker(`TIP-004 PENALTY — ${ALGO_NAMES[block.algo].toUpperCase()} FROZEN x${block.penaltyMultiplier} FOR WINNING TOO OFTEN`, 'bad');
+    } else if ((block.consecutive || 0) >= 2) {
+      ticker(`${ALGO_NAMES[block.algo].toUpperCase()} HEATING UP — ${block.consecutive + 1} WINS IN A ROW`, 'warn');
+    }
+  }
+
+  /** Per-lane power split for the battlefield troops: hostile bots / you / everyone else. */
+  function forceBreakdown() {
+    const lanes = [0, 1, 2, 3].map(() => ({ hostile: 0, mine: 0, other: 0 }));
+    for (const p of roomState?.players || []) {
+      const bucket = p.isBot && p.kind === 'attacker' ? 'hostile' : (p.id === roomState.you ? 'mine' : 'other');
+      for (let i = 0; i < 4; i++) lanes[i][bucket] += Number(p.hashrates?.[i] || 0);
+    }
+    return lanes;
+  }
+
+  // Hostile arrivals/withdrawals per lane, announced in military terms.
+  const hostilePresence = [false, false, false, false];
+
+  function narrateForces(forces) {
+    for (let i = 0; i < 4; i++) {
+      const present = (forces[i]?.hostile || 0) > 50;
+      if (present && !hostilePresence[i]) {
+        ticker(`ENEMY INBOUND — HOSTILE FORCES MASSING ON ${ALGO_NAMES[i].toUpperCase()}`, 'bad');
+      } else if (!present && hostilePresence[i]) {
+        ticker(`HOSTILES WITHDRAW FROM ${ALGO_NAMES[i].toUpperCase()} — THE FIELD IS OURS`, 'good');
+      }
+      hostilePresence[i] = present;
+    }
+  }
+
   function ensureBattlefield() {
     const container = document.getElementById('mpBattlefield');
     if (!container || !window.Battlefield) return;
@@ -306,24 +526,37 @@ const Multiplayer = (function () {
 
   function updateBattlefield(block) {
     if (!window.Battlefield) return;
-    if (roomState?.totals) Battlefield.setPowers(roomState.totals);
+    if (roomState?.players) {
+      const forces = forceBreakdown();
+      Battlefield.setForces(forces);
+      narrateForces(forces);
+    } else if (roomState?.totals) {
+      Battlefield.setPowers(roomState.totals);
+    }
     if (block) Battlefield.blockMined(block);
     if (block?.telemetry) Battlefield.setTelemetry(block.telemetry);
+    if (block) {
+      const recent = (roomState?.recentBlocks || []).slice(-15);
+      const meanBt = recent.length ? recent.reduce((s, b) => s + b.blockTime, 0) / recent.length : 0;
+      Battlefield.setCadence({ meanBt, target: 120, speedup: roomState?.speedup || 30 });
+    }
     const heightEl = document.getElementById('mpBfHeight');
     if (heightEl) heightEl.textContent = `BLOCK ${roomState?.height || 0}`;
+  }
+
+  function showBattlefieldEvent(text, bad = false, duration = 3200) {
     const statusEl = document.getElementById('mpBfStatus');
-    if (statusEl && roomState) {
-      if (roomState.roundOver) {
-        statusEl.textContent = roomState.lastResult?.success ? 'NETWORK DEFENDED' : 'ROUND OVER';
-      } else if (!roomState.running) {
-        statusEl.textContent = 'ARMIES ARE ASSEMBLING';
-      } else if (roomState.objective) {
-        statusEl.textContent = roomState.objective.label;
-        statusEl.classList.toggle('bad', !roomState.objective.ok);
-      } else if (roomState.challenge) {
-        statusEl.textContent = roomState.challenge.name;
-      }
-    }
+    if (!statusEl) return;
+    clearTimeout(showBattlefieldEvent._fadeTimer);
+    clearTimeout(showBattlefieldEvent._hideTimer);
+    statusEl.textContent = text;
+    statusEl.classList.toggle('bad', bad);
+    statusEl.hidden = false;
+    requestAnimationFrame(() => statusEl.classList.add('visible'));
+    showBattlefieldEvent._fadeTimer = setTimeout(() => {
+      statusEl.classList.remove('visible');
+      showBattlefieldEvent._hideTimer = setTimeout(() => { statusEl.hidden = true; }, 350);
+    }, duration);
   }
 
   // --- LWMA telemetry lab (difficulty + block time charts) ---
@@ -461,7 +694,7 @@ const Multiplayer = (function () {
     document.getElementById('mpChallengeName').textContent = challenge.name;
     document.getElementById('mpChallengeBrief').textContent = challenge.brief;
     document.getElementById('mpChallengeVariant').textContent = challenge.variantLabel;
-    document.getElementById('mpChallengeObjective').textContent = `OBJECTIVE: ${challenge.objectiveLabel}`;
+    document.getElementById('mpChallengeObjective').textContent = `WIN CONDITION — ${challenge.objectiveLabel}`;
     overlay.hidden = false;
     clearTimeout(showChallengeCard._timer);
     showChallengeCard._timer = setTimeout(hideChallengeCard, 8000);
@@ -480,12 +713,35 @@ const Multiplayer = (function () {
     document.getElementById('mpVictoryTitle').textContent = success ? 'NETWORK DEFENDED' : 'NETWORK DEGRADED';
     document.getElementById('mpVictoryTitle').classList.toggle('fail', !success);
     document.getElementById('mpVictorySub').textContent = result.challenge?.variantLabel || '';
+
+    // The verdict is decided by exactly one metric (the challenge objective);
+    // say which, so a 0% stability next to "DEFENDED" reads as context, not
+    // as a contradiction.
+    const verdictEl = document.getElementById('mpVictoryVerdict');
+    if (verdictEl) {
+      verdictEl.textContent = result.verdictLabel || '';
+      verdictEl.hidden = !result.verdictLabel;
+      verdictEl.classList.toggle('fail', !success);
+    }
+
+    const scoredStat = result.objectiveType === 'dominance' ? 'share'
+      : result.objectiveType === 'reorg' ? 'reorg'
+      : 'stability';
+    const cell = (key, label, value, isObjectiveStat) => {
+      const scored = key === scoredStat;
+      const tag = scored ? '<em>scored</em>' : (isObjectiveStat ? '<em>not scored</em>' : '');
+      return `<div class="${scored ? 'scored' : 'unscored'}"><span>${label}</span><strong>${value}</strong>${tag}</div>`;
+    };
     document.getElementById('mpVictoryStats').innerHTML = `
-      <div><span>STABILITY</span><strong>${Math.round((result.stability || 0) * 100)}%</strong></div>
-      <div><span>MEAN BT</span><strong>${result.meanBt || 0}s</strong></div>
-      <div><span>TOP ALGO</span><strong>${Math.round((result.maxShare || 0) * 100)}%</strong></div>
-      <div><span>PENALTIES</span><strong>${result.penaltyEvents || 0}</strong></div>
-      ${result.mvpName ? `<div><span>MVP</span><strong>${escapeHtml(result.mvpName)}</strong></div>` : ''}
+      ${cell('stability', 'STABILITY', `${Math.round((result.stability || 0) * 100)}%`, true)}
+      ${cell('share', 'TOP ALGO', `${Math.round((result.maxShare || 0) * 100)}%`, true)}
+      ${cell('reorg', 'DEEPEST REORG', `${result.deepestReorg || 0}`, true)}
+      ${cell('meanBt', 'MEAN BT', `${result.meanBt || 0}s`, false)}
+      ${cell('orphans', 'ORPHANS', `${result.orphans || 0}`, false)}
+      ${cell('worstGap', 'LONGEST BLOCK WAIT', `${result.worstGap || 0}s`, false)}
+      ${cell('diffSwing', 'DIFF SWING', `${(result.diffSwing || 1).toFixed(1)}x`, false)}
+      ${cell('penalties', 'PENALTIES', `${result.penaltyEvents || 0}`, false)}
+      ${result.mvpName ? `<div class="mp-result-mvp"><span>MVP</span><strong>${escapeHtml(result.mvpName)}</strong></div>` : ''}
       <div class="mp-result-note">Datapoint recorded — thanks for testing the Tari network.</div>`;
     overlay.querySelector('.mp-confetti').style.display = success ? '' : 'none';
     overlay.hidden = false;
@@ -517,18 +773,21 @@ const Multiplayer = (function () {
     }
     const byChallenge = new Map();
     for (const row of results) {
-      if (!byChallenge.has(row.challenge)) byChallenge.set(row.challenge, []);
-      byChallenge.get(row.challenge).push(row);
+      const key = `${row.simulationVersion || 'legacy'}::${row.challenge}`;
+      if (!byChallenge.has(key)) byChallenge.set(key, []);
+      byChallenge.get(key).push(row);
     }
     el.innerHTML = [...byChallenge.entries()].map(([, rows]) => {
       const name = rows[0].challengeName || rows[0].challenge;
+      const version = rows[0].simulationVersion === 'legacy' ? 'LEGACY MODEL' : 'CALIBRATED MODEL';
       const bars = rows.map((r) => `
         <div class="mp-research-row">
           <span class="mp-research-variant">${escapeHtml(r.variantLabel || r.variant)}</span>
           <div class="mp-research-bar"><div style="width:${Math.round(r.winRate * 100)}%"></div></div>
           <span class="mp-research-num">${Math.round(r.winRate * 100)}% defended · ${r.rounds} round${r.rounds === 1 ? '' : 's'} · avg stability ${Math.round(r.avgStability * 100)}%</span>
+          <span class="mp-research-health">chain health: mean BT ${r.avgMeanBt || 0}s · orphans ${r.avgOrphans ?? 0} · reorg ${r.avgDeepestReorg ?? 0} · longest wait ${r.avgWorstGap ?? '—'}${r.avgWorstGap == null ? '' : 's'} · diff swing ${r.avgDiffSwing ?? '—'}${r.avgDiffSwing == null ? '' : 'x'}</span>
         </div>`).join('');
-      return `<div class="mp-research-group"><h4>${escapeHtml(name)}</h4>${bars}</div>`;
+      return `<div class="mp-research-group"><h4>${escapeHtml(name)} · ${version}</h4>${bars}</div>`;
     }).join('');
   }
 
@@ -543,8 +802,12 @@ const Multiplayer = (function () {
     renderStatus();
     if (!inRoom) return;
 
+    engageCopilotByDefault();
+
     const isHost = roomState.hostId === roomState.you;
     document.getElementById('mpRoomLabel').textContent = roomState.room;
+    const debugLink = document.getElementById('mpDebugLink');
+    if (debugLink) debugLink.href = `/api/debug/${roomState.room}`;
     document.getElementById('mpShareLink').textContent = `${location.origin}/?room=${roomState.room}`;
     renderStatusLamp();
     document.getElementById('mpHeight').textContent = String(roomState.height || 0);
@@ -681,7 +944,8 @@ const Multiplayer = (function () {
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;');
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
   }
 
   return { init };

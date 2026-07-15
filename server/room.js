@@ -8,6 +8,7 @@ const {
   mulberry32,
   aggregateHashrates,
   mineOneBlock,
+  powerToHashrate,
 } = require('./engine');
 const { drawChallenge, publicChallenge, ObjectiveTracker } = require('./challenges');
 const { recordRound } = require('./research');
@@ -15,11 +16,24 @@ const { recordRound } = require('./research');
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_CHAIN = 200;
 const DEFAULT_WINDOW = 45;
-const DEFAULT_SPEEDUP = 120;
+// 30x keeps a 120s target block around 3-4 real seconds — slow enough to
+// watch an attack unfold on the battlefield. Hosts can still crank it up.
+const DEFAULT_SPEEDUP = 30;
 const DEFAULT_HASHRATE = 100;
 const DEFAULT_GOAL = 20;
 const POINTS_PER_BLOCK = 100;
 const STREAK_BONUS = 25;
+// Separates this calibrated, textured simulation from legacy research rows.
+const SIMULATION_VERSION = 'mainnet-texture-v2';
+
+function sanitizePlayerName(name) {
+  const normalized = String(name ?? '').normalize('NFKC')
+    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .replace(/[^\p{L}\p{M}\p{N}\s_.-]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  return [...normalized].slice(0, 24).join('') || 'Miner';
+}
 
 function randomCode(length = 5) {
   let code = '';
@@ -29,15 +43,16 @@ function randomCode(length = 5) {
   return code;
 }
 
-function createPlayer(id, name, isBot = false) {
+function createPlayer(id, name, isBot = false, kind = null) {
   const hashrates = { 0: 0, 1: 0, 2: 0, 3: 0 };
   if (!isBot) hashrates[1] = DEFAULT_HASHRATE;
   return {
     id,
-    name: String(name || 'Miner').slice(0, 24),
+    name: sanitizePlayerName(name),
     hashrates,
     connected: true,
     isBot,
+    kind,
     blocksMined: 0,
     score: 0,
     streak: 0,
@@ -71,6 +86,7 @@ class Room {
     this.challenge = null;
     this.objective = null;
     this.lastResult = null;
+    this.shadow = null;
   }
 
   addClient(playerId, ws, name) {
@@ -79,10 +95,14 @@ class Room {
       player = createPlayer(playerId, name);
       this.players.set(playerId, player);
     } else {
-      player.name = String(name || player.name).slice(0, 24);
+      player.name = sanitizePlayerName(name || player.name);
       player.connected = true;
     }
     this.clients.set(playerId, ws);
+    // A rejoining human reclaims the host seat if the current host is a bot,
+    // disconnected, or missing.
+    const currentHost = this.hostId ? this.players.get(this.hostId) : null;
+    if (!currentHost || currentHost.isBot || !currentHost.connected) this.hostId = playerId;
     return player;
   }
 
@@ -96,7 +116,7 @@ class Room {
     }
 
     if (this.hostId === playerId) {
-      const nextHost = [...this.players.values()].find((p) => p.connected);
+      const nextHost = [...this.players.values()].find((p) => p.connected && !p.isBot);
       this.hostId = nextHost ? nextHost.id : null;
     }
 
@@ -143,6 +163,7 @@ class Room {
         bestStreak: p.bestStreak,
         connected: p.connected,
         isBot: !!p.isBot,
+        kind: p.kind || null,
         isHost: p.id === this.hostId,
         hashrates: p.hashrates,
       }))
@@ -197,6 +218,9 @@ class Room {
       shareUrlPath: `/?room=${this.code}`,
       challenge: publicChallenge(this.challenge),
       objective: this.objective ? this.objective.progress() : null,
+      shadow: this.shadow && !this.shadow.done && this.shadow.count > 0
+        ? { count: this.shadow.count, algo: this.shadow.algo }
+        : null,
       lastResult: this.lastResult,
     };
   }
@@ -250,13 +274,18 @@ class Room {
     this._resetScoresAndChain(true);
 
     for (const bot of this.challenge.bots) {
-      const player = createPlayer(`bot:${bot.name}`, bot.name, true);
+      const player = createPlayer(`bot:${bot.name}`, bot.name, true, bot.kind);
       this.players.set(player.id, player);
     }
+    // Selfish-mining state: the shadow rig mines a hidden chain off the books.
+    this.shadow = this.challenge.shadow
+      ? { ...this.challenge.shadow, count: 0, done: false }
+      : null;
     this._applyBotSchedules(0);
     // Start the round in difficulty equilibrium for the opening power mix so
     // the scored objective measures the attack response, not warm-up drift.
-    seedWindowsForPower(this.windows, aggregateHashrates(this.players), this.simTimestamp);
+    // Windows are seeded with real mainnet texture (see engine.js).
+    seedWindowsForPower(this.windows, aggregateHashrates(this.players), this.simTimestamp, this.rng);
   }
 
   _applyBotSchedules(height) {
@@ -299,6 +328,7 @@ class Room {
     this._removeBots();
     this.challenge = null;
     this.objective = null;
+    this.shadow = null;
     for (const [id, p] of this.players) {
       if (!p.connected) this.players.delete(id);
     }
@@ -349,6 +379,7 @@ class Room {
     recordRound({
       ts: Date.now(),
       room: this.code,
+      simulationVersion: SIMULATION_VERSION,
       challenge: this.challenge.id,
       challengeName: this.challenge.name,
       variant: this.challenge.variant.id,
@@ -366,11 +397,165 @@ class Room {
     this.broadcastState();
   }
 
+  /**
+   * Selfish-mining simulation. While the round is between startAt and stopAt,
+   * the shadow rig mines the target algo on a private chain: during each
+   * public block's solve time it finds Poisson(shadowRate * blockTime) hidden
+   * blocks, where shadowRate = hashrate / current public difficulty. Players
+   * pushing hash onto that lane raise its difficulty and starve the rig.
+   */
+  _shadowStep(block) {
+    const shadow = this.shadow;
+    if (!shadow || shadow.done || this.roundOver) return;
+    if (this.height < shadow.startAt) return;
+
+    if (this.height >= shadow.stopAt) {
+      if (shadow.count >= shadow.minReveal) {
+        this._revealShadow();
+      } else if (shadow.count > 0) {
+        this.broadcast({
+          type: 'shadow_fizzle',
+          algo: shadow.algo,
+          algoName: ALGO_NAMES[shadow.algo],
+          count: shadow.count,
+        });
+        shadow.count = 0;
+      }
+      shadow.done = true;
+      return;
+    }
+
+    const telemetry = (block.telemetry || []).find((t) => t.algo === shadow.algo);
+    const difficulty = Number(telemetry?.difficulty || 0);
+    if (difficulty <= 0) return;
+    const lambda = (powerToHashrate(shadow.algo, shadow.power) / difficulty) * block.blockTime;
+
+    // Knuth Poisson sampler — lambda is small (<< 1 at healthy difficulty).
+    let found = 0;
+    const limit = Math.exp(-lambda);
+    let p = this.rng();
+    while (p > limit) { found += 1; p *= this.rng(); }
+
+    if (found > 0) {
+      shadow.dryStreak = 0;
+      shadow.count = Math.min(shadow.revealAt, shadow.count + found);
+      this.broadcast({
+        type: 'shadow_block',
+        count: shadow.count,
+        algo: shadow.algo,
+        algoName: ALGO_NAMES[shadow.algo],
+      });
+      if (shadow.count >= shadow.revealAt) this._revealShadow();
+    } else if (shadow.count > 0) {
+      // Every public block found while the rig is dry pulls the honest chain
+      // ahead; after staleAfter dry blocks the oldest hidden block goes stale.
+      shadow.dryStreak = (shadow.dryStreak || 0) + 1;
+      if (shadow.dryStreak >= shadow.staleAfter) {
+        shadow.dryStreak = 0;
+        shadow.count -= 1;
+        this.broadcast({
+          type: 'shadow_block',
+          count: shadow.count,
+          algo: shadow.algo,
+          algoName: ALGO_NAMES[shadow.algo],
+          stale: true,
+        });
+      }
+    }
+  }
+
+  /**
+   * The hidden chain is revealed: the last `depth` canonical blocks are
+   * orphaned and replaced by the attacker's blocks. Points earned on the
+   * orphaned blocks are clawed back; the attacker banks the replacements.
+   * The reorged blocks count as consecutive shadow-algo wins, so under
+   * TIP-004 the attacker's lane comes out of the reveal heavily penalized.
+   */
+  _revealShadow() {
+    const shadow = this.shadow;
+    const depth = Math.min(shadow.count, shadow.revealAt, this.chain.length);
+    if (depth <= 0) { shadow.count = 0; return; }
+
+    const attackerBot = this.challenge.bots.find((b) => b.kind === 'attacker');
+    const attackerId = attackerBot ? `bot:${attackerBot.name}` : null;
+    const attacker = attackerId ? this.players.get(attackerId) : null;
+
+    const orphaned = this.chain.splice(-depth);
+    for (const dead of orphaned) {
+      const victim = dead.minerId ? this.players.get(dead.minerId) : null;
+      if (victim) {
+        victim.score = Math.max(0, victim.score - (dead.pointsEarned || 0));
+        victim.blocksMined = Math.max(0, victim.blocksMined - 1);
+      }
+    }
+
+    // Roll the orphaned tip samples out of their algo windows, then feed the
+    // replacement blocks into the shadow algo so future LWMA calculations
+    // follow the rewritten canonical history.
+    for (const dead of [...orphaned].reverse()) {
+      const samples = this.windows[dead.algo]?.samples;
+      if (samples?.length) samples.pop();
+    }
+    const newBlocks = orphaned.map((dead) => {
+      const replacementDifficulty = this.windows[shadow.algo].calculate()
+        || BigInt(dead.difficulty);
+      this.windows[shadow.algo].add(dead.timestamp, replacementDifficulty);
+      return {
+        ...dead,
+        algo: shadow.algo,
+        algoName: ALGO_NAMES[shadow.algo],
+        difficulty: replacementDifficulty.toString(),
+        minerId: attackerId,
+        minerName: attacker?.name || 'SHADOW RIG',
+        pointsEarned: POINTS_PER_BLOCK,
+        minerStreak: 0,
+        minerScore: attacker ? attacker.score : 0,
+        orphan: null,
+        reorged: true,
+        telemetry: (dead.telemetry || []).map((entry) => entry.algo === shadow.algo
+          ? { ...entry, difficulty: replacementDifficulty.toString() }
+          : entry),
+      };
+    });
+    this.chain.push(...newBlocks);
+
+    if (attacker) {
+      attacker.score += depth * POINTS_PER_BLOCK;
+      attacker.blocksMined += depth;
+    }
+    // Streaks don't survive a rewrite; the shadow algo now owns the tip.
+    for (const player of this.players.values()) player.streak = 0;
+    this.lastMinerId = attackerId;
+    this.lastWinner = shadow.algo;
+    this.consecutiveCount = depth - 1;
+
+    if (this.objective) this.objective.noteReorg(depth);
+    shadow.count = 0;
+
+    this.broadcast({
+      type: 'reorg',
+      depth,
+      algo: shadow.algo,
+      algoName: ALGO_NAMES[shadow.algo],
+      attackerName: attacker?.name || 'SHADOW RIG',
+      orphanedBlocks: orphaned.map((b) => ({
+        height: b.height, algo: b.algo, algoName: b.algoName, minerName: b.minerName,
+      })),
+      newBlocks,
+      leaderboard: this.leaderboard(),
+      objective: this.objective ? this.objective.progress() : null,
+    });
+  }
+
   scheduleNext(delayMs = 200) {
     if (!this.running) return;
     if (this.timer) clearTimeout(this.timer);
 
+    // Debug breadcrumbs for /api/debug/:roomCode — a running room whose timer
+    // fired long ago with nothing rearmed means the loop chain died.
+    this._timerArmedAt = Date.now();
     this.timer = setTimeout(() => {
+      this.timer = null;
       if (!this.running) return;
 
       const block = mineOneBlock(this, this.players, this.rng);
@@ -378,6 +563,7 @@ class Room {
         this.scheduleNext(1000);
         return;
       }
+      this._lastBlockAt = Date.now();
 
       this.awardBlock(block);
       this.chain.push(block);
@@ -394,6 +580,8 @@ class Room {
         goalBlocks: this.goalBlocks,
         objective: this.objective ? this.objective.progress() : null,
       });
+
+      this._shadowStep(block);
 
       if (this.challenge && this.height >= this.challenge.durationBlocks) {
         this.finishChallenge();
@@ -435,4 +623,4 @@ class RoomManager {
   }
 }
 
-module.exports = { RoomManager, DEFAULT_HASHRATE };
+module.exports = { RoomManager, DEFAULT_HASHRATE, sanitizePlayerName };
