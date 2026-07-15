@@ -91,7 +91,7 @@ const Copilot = (function () {
       .filter(([, s]) => s.plays > 0)
       .map(([id, s]) => `${id}: ${s.wins}/${s.plays} wins, avg stability ${s.plays ? Math.round((s.stabilitySum / s.plays) * 100) : 0}%`);
     const prompt = [
-      `New round. Challenge: ${challenge.name} (id ${challenge.id}). Config: ${challenge.variantLabel} (${challenge.variantId === 'lwma90' ? 'slow LWMA-90 window, NO TIP-004 penalty' : 'fast LWMA-45 window, TIP-004 penalty active'}).`,
+      `Challenge started: ${challenge.name} (id ${challenge.id}). Config: ${challenge.variantLabel} (${challenge.variantId === 'lwma90' ? 'slow LWMA-90 window, NO TIP-004 penalty' : 'fast LWMA-45 window, TIP-004 penalty active'}).`,
       challenge.shadowAlgo != null ? `Shadow miner targets algo ${challenge.shadowAlgo}.` : '',
       memLines.length ? `My memory on this exact challenge+config (${entry.plays} past plays):\n${memLines.join('\n')}` : 'No memory of this challenge+config yet.',
       entry.lessons?.length ? `Lessons from past rounds:\n${entry.lessons.join('\n')}` : '',

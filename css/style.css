@@ -1297,6 +1297,31 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     margin-top: 4px;
 }
 .mp-research { grid-template-columns: 1fr; }
+.mp-research-reset {
+    float: right;
+    margin: -30px 0 12px 12px;
+    font-size: 8px;
+}
+.mp-reset-card { max-width: 500px; }
+.mp-reset-token {
+    display: block;
+    margin: 18px 0;
+    color: #c8d4ec;
+    text-align: left;
+    font-size: 12px;
+}
+.mp-reset-token[hidden] { display: none; }
+.mp-reset-token input {
+    width: 100%;
+    margin-top: 6px;
+    box-sizing: border-box;
+}
+.mp-reset-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 18px;
+}
 .mp-research-group { margin-bottom: 14px; }
 .mp-research-group h4 {
     font-family: 'Press Start 2P', monospace;

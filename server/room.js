@@ -262,6 +262,12 @@ class Room {
     return { ok: true };
   }
 
+  continueToNext(playerId) {
+    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can continue' };
+    if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
+    return this.start(playerId);
+  }
+
   _armChallenge() {
     this.challenge = drawChallenge(this.rng);
     this.objective = new ObjectiveTracker(this.challenge);
@@ -334,7 +340,7 @@ class Room {
     }
     this.stop();
     this._resetScoresAndChain(true);
-    this.broadcast({ type: 'status', message: 'New round ready', running: false });
+    this.broadcast({ type: 'status', message: 'Round abandoned — ready for a new challenge', running: false });
     this.broadcastState();
     return { ok: true };
   }

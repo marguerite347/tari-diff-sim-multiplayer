@@ -8,8 +8,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.RESEARCH_DATA_DIR
+  ? path.resolve(process.env.RESEARCH_DATA_DIR)
+  : path.join(__dirname, '..', 'data');
 const DATA_FILE = path.join(DATA_DIR, 'rounds.jsonl');
+const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 
 function recordRound(entry) {
   try {
@@ -98,4 +101,27 @@ function aggregate() {
   }));
 }
 
-module.exports = { recordRound, aggregate };
+function archiveAndReset(dataFile = DATA_FILE, archiveDir = ARCHIVE_DIR) {
+  if (!fs.existsSync(dataFile)) return { reset: true, archived: false, archive: null };
+
+  const raw = fs.readFileSync(dataFile, 'utf8');
+  let archivePath = null;
+  if (raw.length > 0) {
+    fs.mkdirSync(archiveDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    archivePath = path.join(archiveDir, `rounds-${stamp}.jsonl`);
+    fs.copyFileSync(dataFile, archivePath, fs.constants.COPYFILE_EXCL);
+  }
+
+  fs.mkdirSync(path.dirname(dataFile), { recursive: true });
+  const tempFile = `${dataFile}.reset-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tempFile, '');
+  fs.renameSync(tempFile, dataFile);
+  return {
+    reset: true,
+    archived: !!archivePath,
+    archive: archivePath ? path.relative(path.join(__dirname, '..'), archivePath) : null,
+  };
+}
+
+module.exports = { recordRound, aggregate, archiveAndReset };

@@ -17,6 +17,7 @@ const Multiplayer = (function () {
   let statusMessage = '';
   let toastTimer = null;
   let copilotAutoEngaged = false;
+  let researchResetRequiresToken = false;
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -211,6 +212,7 @@ const Multiplayer = (function () {
     document.getElementById('mpStart')?.addEventListener('click', () => send({ type: 'start' }));
     document.getElementById('mpStop')?.addEventListener('click', () => send({ type: 'stop' }));
     document.getElementById('mpReset')?.addEventListener('click', () => {
+      if (!window.confirm('ABANDON THIS ROUND? CURRENT PROGRESS AND SCORES WILL BE LOST.')) return;
       hideVictory();
       if (window.Battlefield) Battlefield.reset();
       send({ type: 'reset' });
@@ -220,7 +222,23 @@ const Multiplayer = (function () {
       send({ type: 'leave' });
       history.replaceState({}, '', location.pathname);
     });
-    document.getElementById('mpVictoryDismiss')?.addEventListener('click', hideVictory);
+    document.getElementById('mpVictoryDismiss')?.addEventListener('click', () => {
+      const isHost = roomState?.hostId === roomState?.you;
+      hideVictory();
+      if (!isHost) return;
+      if (window.Battlefield) Battlefield.reset();
+      send({ type: 'continue' });
+    });
+    document.getElementById('mpResearchReset')?.addEventListener('click', openResearchReset);
+    document.getElementById('mpResearchResetClose')?.addEventListener('click', closeResearchReset);
+    document.getElementById('mpResearchResetCancel')?.addEventListener('click', closeResearchReset);
+    document.getElementById('mpResearchResetForm')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      resetResearch();
+    });
+    document.getElementById('mpResearchResetDialog')?.addEventListener('click', (event) => {
+      if (event.target.id === 'mpResearchResetDialog') closeResearchReset();
+    });
 
     document.getElementById('mpCopyLink')?.addEventListener('click', async () => {
       if (!roomState) return;
@@ -303,7 +321,10 @@ const Multiplayer = (function () {
       if (event.target === overlay) hideTutorial();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') hideTutorial();
+      if (event.key === 'Escape') {
+        hideTutorial();
+        closeResearchReset();
+      }
     });
     document.getElementById('mpHelp')?.addEventListener('click', showTutorial);
     document.getElementById('mpHelpLobby')?.addEventListener('click', showTutorial);
@@ -385,6 +406,9 @@ const Multiplayer = (function () {
     } else if (roomState.running) {
       el.textContent = 'LIVE';
       el.className = 'mp-hud-value mp-status-lamp live';
+    } else if (!roomState.challenge) {
+      el.textContent = 'READY';
+      el.className = 'mp-hud-value mp-status-lamp';
     } else {
       el.textContent = 'PAUSED';
       el.className = 'mp-hud-value mp-status-lamp';
@@ -733,6 +757,11 @@ const Multiplayer = (function () {
       ${cell('penalties', 'PENALTIES', `${result.penaltyEvents || 0}`, false)}
       ${result.mvpName ? `<div class="mp-result-mvp"><span>MVP</span><strong>${escapeHtml(result.mvpName)}</strong></div>` : ''}
       <div class="mp-result-note">Datapoint recorded — thanks for testing the Tari network.</div>`;
+    const continueButton = document.getElementById('mpVictoryDismiss');
+    if (continueButton) {
+      const isHost = roomState?.hostId === roomState?.you;
+      continueButton.textContent = isHost ? 'CONTINUE TO NEXT CHALLENGE' : 'CLOSE RESULTS';
+    }
     overlay.querySelector('.mp-confetti').style.display = success ? '' : 'none';
     overlay.hidden = false;
   }
@@ -748,9 +777,62 @@ const Multiplayer = (function () {
     try {
       const res = await fetch('/api/research');
       const data = await res.json();
+      const resetButton = document.getElementById('mpResearchReset');
+      researchResetRequiresToken = !!data.resetRequiresToken;
+      if (resetButton) resetButton.hidden = !data.resetAvailable;
       renderResearch(data.results || []);
     } catch {
       /* endpoint unavailable in static mode — leave placeholder */
+    }
+  }
+
+  function openResearchReset() {
+    const dialog = document.getElementById('mpResearchResetDialog');
+    const tokenField = document.getElementById('mpResearchTokenField');
+    const tokenInput = document.getElementById('mpResearchAdminToken');
+    if (!dialog || !tokenInput) return;
+    tokenInput.value = '';
+    if (tokenField) tokenField.hidden = !researchResetRequiresToken;
+    dialog.hidden = false;
+    requestAnimationFrame(() => {
+      if (researchResetRequiresToken) tokenInput.focus();
+      else document.getElementById('mpResearchResetConfirm')?.focus();
+    });
+  }
+
+  function closeResearchReset() {
+    const dialog = document.getElementById('mpResearchResetDialog');
+    const tokenInput = document.getElementById('mpResearchAdminToken');
+    if (tokenInput) tokenInput.value = '';
+    if (dialog) dialog.hidden = true;
+  }
+
+  async function resetResearch() {
+    const confirmButton = document.getElementById('mpResearchResetConfirm');
+    const tokenInput = document.getElementById('mpResearchAdminToken');
+    if (!confirmButton || !tokenInput) return;
+    const token = tokenInput.value;
+    tokenInput.value = '';
+    if (researchResetRequiresToken && !token) {
+      showToast('ADMIN TOKEN REQUIRED', 'bad');
+      tokenInput.focus();
+      return;
+    }
+
+    confirmButton.disabled = true;
+    try {
+      const headers = {};
+      if (researchResetRequiresToken) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch('/api/research/reset', { method: 'POST', headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Reset failed (${res.status})`);
+      closeResearchReset();
+      showToast(data.archived ? 'RESEARCH RESET — ARCHIVE SAVED' : 'RESEARCH RESET — NO PRIOR DATA', 'good');
+      await loadResearch();
+    } catch (err) {
+      showToast(String(err.message || err).toUpperCase(), 'bad');
+    } finally {
+      confirmButton.disabled = false;
     }
   }
 
@@ -801,7 +883,32 @@ const Multiplayer = (function () {
     document.getElementById('mpShareLink').textContent = `${location.origin}/?room=${roomState.room}`;
     renderStatusLamp();
     document.getElementById('mpHeight').textContent = String(roomState.height || 0);
-    document.getElementById('mpHostControls').style.opacity = isHost ? '1' : '0.45';
+    const hostControls = document.getElementById('mpHostControls');
+    const roundControls = document.getElementById('mpRoundControls');
+    if (hostControls) hostControls.style.display = isHost ? '' : 'none';
+    if (roundControls) roundControls.style.display = isHost ? '' : 'none';
+    if (isHost) {
+      const startButton = document.getElementById('mpStart');
+      const stopButton = document.getElementById('mpStop');
+      const resetButton = document.getElementById('mpReset');
+      const idle = !roomState.challenge && !roomState.roundOver;
+      const paused = !!roomState.challenge && !roomState.running && !roomState.roundOver;
+      if (startButton) {
+        startButton.style.display = idle || paused ? '' : 'none';
+        startButton.disabled = !(idle || paused);
+        startButton.textContent = paused ? '▶ RESUME' : '▶ START CHALLENGE';
+      }
+      if (stopButton) {
+        stopButton.style.display = roomState.running ? '' : 'none';
+        stopButton.disabled = !roomState.running;
+        stopButton.textContent = 'PAUSE';
+      }
+      if (resetButton) {
+        resetButton.style.display = roomState.challenge && !roomState.roundOver ? '' : 'none';
+        resetButton.disabled = !roomState.challenge || roomState.roundOver;
+        resetButton.textContent = 'ABANDON ROUND';
+      }
+    }
     const speedInput = document.getElementById('mpSpeedup');
     if (speedInput && document.activeElement !== speedInput) speedInput.value = roomState.speedup;
 

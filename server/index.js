@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { RoomManager, sanitizePlayerName } = require('./room');
-const { aggregate } = require('./research');
+const { aggregate, archiveAndReset } = require('./research');
 
 const PORT = Number(process.env.PORT || 8787);
 const ROOT = path.join(__dirname, '..');
@@ -14,7 +14,10 @@ const MAX_ACTIVE_ROOMS = 100;
 const MAX_HUMANS_PER_ROOM = 32;
 const MESSAGE_RATE_LIMIT = 30;
 const MESSAGE_RATE_WINDOW_MS = 10_000;
+const RESET_RATE_LIMIT = 5;
+const RESET_RATE_WINDOW_MS = 10 * 60_000;
 const RESUME_SECRET = crypto.randomBytes(32);
+const resetAttempts = new Map();
 
 const app = express();
 app.use((_req, res, next) => {
@@ -52,8 +55,61 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'tari-diff-sim-multiplayer' });
 });
 
-app.get('/api/research', (_req, res) => {
-  res.json({ ok: true, results: aggregate() });
+function isLocalRequest(req) {
+  const address = req.socket.remoteAddress || '';
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function resetCapability(req) {
+  const tokenConfigured = !!process.env.RESEARCH_ADMIN_TOKEN;
+  const production = process.env.NODE_ENV === 'production';
+  const local = isLocalRequest(req);
+  return {
+    resetAvailable: production ? tokenConfigured : (local || tokenConfigured),
+    resetRequiresToken: production ? tokenConfigured : (!local && tokenConfigured),
+  };
+}
+
+function tokenMatches(actual, expected) {
+  const digest = (value) => crypto.createHash('sha256').update(String(value || '')).digest();
+  return crypto.timingSafeEqual(digest(actual), digest(expected));
+}
+
+function resetRateLimited(req) {
+  const now = Date.now();
+  const key = req.ip || req.socket.remoteAddress || 'unknown';
+  const recent = (resetAttempts.get(key) || []).filter((ts) => now - ts < RESET_RATE_WINDOW_MS);
+  recent.push(now);
+  resetAttempts.set(key, recent);
+  return recent.length > RESET_RATE_LIMIT;
+}
+
+app.get('/api/research', (req, res) => {
+  res.json({ ok: true, ...resetCapability(req), results: aggregate() });
+});
+
+app.post('/api/research/reset', (req, res) => {
+  const capability = resetCapability(req);
+  if (!capability.resetAvailable) {
+    return res.status(503).json({ ok: false, error: 'Research reset is not configured' });
+  }
+  if (resetRateLimited(req)) {
+    return res.status(429).json({ ok: false, error: 'Too many reset attempts; try again later' });
+  }
+
+  if (capability.resetRequiresToken) {
+    const match = String(req.get('authorization') || '').match(/^Bearer (.+)$/);
+    if (!match || !tokenMatches(match[1], process.env.RESEARCH_ADMIN_TOKEN)) {
+      return res.status(401).json({ ok: false, error: 'Invalid admin token' });
+    }
+  }
+
+  try {
+    res.json({ ok: true, ...archiveAndReset() });
+  } catch (err) {
+    console.error('Failed to reset research data:', err.message);
+    res.status(500).json({ ok: false, error: 'Research reset failed' });
+  }
 });
 
 const server = http.createServer(app);
@@ -263,6 +319,13 @@ function handleMessage(ws, msg) {
       const room = rooms.get(ws.roomCode);
       if (!room) return;
       const result = room.start(ws.playerId);
+      if (!result.ok) send(ws, { type: 'error', error: result.error });
+      break;
+    }
+    case 'continue': {
+      const room = rooms.get(ws.roomCode);
+      if (!room) return;
+      const result = room.continueToNext(ws.playerId);
       if (!result.ok) send(ws, { type: 'error', error: result.error });
       break;
     }

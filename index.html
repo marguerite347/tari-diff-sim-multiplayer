@@ -53,7 +53,7 @@
                 <p class="mp-title-kicker">Pilot briefing</p>
                 <h2 class="mp-victory-logo">HOW TO PLAY</h2>
                 <ol class="mp-tutorial-steps">
-                    <li><strong>Suit up.</strong> Enter a callsign, then create a new game or join with a friend&rsquo;s room code. The host hits START to launch a round.</li>
+                    <li><strong>Suit up.</strong> Enter a callsign, then create a new game or join with a friend&rsquo;s room code. The host starts the challenge and can pause, resume, or abandon an active round.</li>
                     <li><strong>Read the mission HUD.</strong> Every round a scripted attacker messes with the network. Your objective stays at the top: keep block times stable, or keep any one algo below its share limit.</li>
                     <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
                     <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and white helmet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
@@ -105,7 +105,7 @@
                     <p id="mpVictoryVerdict" class="mp-victory-verdict" hidden></p>
                     <p id="mpVictorySub"></p>
                     <div id="mpVictoryStats" class="mp-result-stats"></div>
-                    <button id="mpVictoryDismiss" class="mp-arcade-btn primary">Continue</button>
+                    <button id="mpVictoryDismiss" class="mp-arcade-btn primary">CONTINUE TO NEXT CHALLENGE</button>
                 </div>
             </div>
             <div id="mpChallengeCard" class="mp-victory" hidden>
@@ -119,6 +119,24 @@
                     <p id="mpChallengeObjective" class="mp-challenge-objective"></p>
                     <p class="mp-challenge-scoring">Meet this objective at round end. Stats marked SCORED decide the result.</p>
                     <button id="mpChallengeGo" class="mp-arcade-btn primary">Deploy rigs</button>
+                </div>
+            </div>
+            <div id="mpResearchResetDialog" class="mp-victory" role="dialog" aria-modal="true" aria-labelledby="mpResearchResetTitle" hidden>
+                <div class="mp-victory-card mp-reset-card">
+                    <button id="mpResearchResetClose" class="mp-tutorial-close" aria-label="Close reset dialog">&times;</button>
+                    <p class="mp-title-kicker">Admin action</p>
+                    <h2 id="mpResearchResetTitle" class="mp-victory-logo fail">RESET RESEARCH DATA?</h2>
+                    <p>All current aggregate results will reset. The server will archive the existing research file before clearing it.</p>
+                    <form id="mpResearchResetForm">
+                        <label id="mpResearchTokenField" class="mp-reset-token">
+                            Admin token
+                            <input id="mpResearchAdminToken" type="password" autocomplete="off" spellcheck="false">
+                        </label>
+                        <div class="mp-reset-actions">
+                            <button id="mpResearchResetCancel" type="button" class="mp-arcade-btn">Cancel</button>
+                            <button id="mpResearchResetConfirm" type="submit" class="mp-arcade-btn danger">RESET AND ARCHIVE</button>
+                        </div>
+                    </form>
                 </div>
             </div>
 
@@ -192,10 +210,10 @@
                         <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="30"></label>
                         <span class="mp-host-note">Window &amp; TIP-004 penalty are dealt by the challenge draw — that&rsquo;s the experiment.</span>
                     </div>
-                    <div class="mp-deck-buttons">
+                    <div id="mpRoundControls" class="mp-deck-buttons">
                         <button id="mpStart" class="mp-arcade-btn primary">&#9654; Start challenge</button>
                         <button id="mpStop" class="mp-arcade-btn">Pause</button>
-                        <button id="mpReset" class="mp-arcade-btn danger">New round</button>
+                        <button id="mpReset" class="mp-arcade-btn danger">Abandon round</button>
                     </div>
                 </div>
 
@@ -281,6 +299,7 @@
                 <div class="mp-panel mp-lab-panel">
                     <h3 class="mp-panel-title">Community research — status quo vs proposed</h3>
                     <p class="mp-lab-hint">Every finished round is a datapoint. Win rate = how often players kept the network on target under each config.</p>
+                    <button id="mpResearchReset" class="mp-arcade-btn danger mp-research-reset" hidden>RESET RESEARCH DATA</button>
                     <div id="mpResearch" class="mp-research-grid">
                         <div class="dim">No rounds recorded yet — finish a challenge to add the first datapoint.</div>
                     </div>
