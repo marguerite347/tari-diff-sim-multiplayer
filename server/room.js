@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const {
   ALGO_IDS,
   ALGO_NAMES,
@@ -25,6 +26,10 @@ const POINTS_PER_BLOCK = 100;
 const STREAK_BONUS = 25;
 // Separates this calibrated, textured simulation from legacy research rows.
 const SIMULATION_VERSION = 'mainnet-texture-v2';
+const CALLSIGN_WORDS = [
+  'EMBER', 'ORBIT', 'BEACON', 'FORGE', 'NEXUS', 'QUARTZ', 'RELAY', 'SENTRY',
+  'SPARK', 'VECTOR', 'VAULT', 'PULSE', 'COMET', 'CIPHER', 'ANCHOR', 'TUNNEL',
+];
 
 function sanitizePlayerName(name) {
   const normalized = String(name ?? '').normalize('NFKC')
@@ -33,6 +38,11 @@ function sanitizePlayerName(name) {
     .replace(/\s+/gu, ' ')
     .trim();
   return [...normalized].slice(0, 24).join('') || 'Miner';
+}
+
+function generateCallsign() {
+  const word = CALLSIGN_WORDS[crypto.randomInt(CALLSIGN_WORDS.length)];
+  return `MINER-${word}-${String(crypto.randomInt(100)).padStart(2, '0')}`;
 }
 
 function randomCode(length = 5) {
@@ -75,6 +85,7 @@ class Room {
     this.lastMinerId = null;
     this.penalty = true;
     this.windowSize = DEFAULT_WINDOW;
+    this.variantMode = 'random';
     this.speedup = DEFAULT_SPEEDUP;
     this.goalBlocks = DEFAULT_GOAL;
     this.running = false;
@@ -91,11 +102,15 @@ class Room {
 
   addClient(playerId, ws, name) {
     let player = this.players.get(playerId);
+    const requestedName = sanitizePlayerName(name);
+    const defaultRequested = requestedName.toLowerCase() === 'miner';
+    const preferredName = defaultRequested ? (player?.name || generateCallsign()) : requestedName;
+    const displayName = this.uniqueHumanName(preferredName, playerId);
     if (!player) {
-      player = createPlayer(playerId, name);
+      player = createPlayer(playerId, displayName);
       this.players.set(playerId, player);
     } else {
-      player.name = sanitizePlayerName(name || player.name);
+      player.name = displayName;
       player.connected = true;
     }
     this.clients.set(playerId, ws);
@@ -104,6 +119,29 @@ class Room {
     const currentHost = this.hostId ? this.players.get(this.hostId) : null;
     if (!currentHost || currentHost.isBot || !currentHost.connected) this.hostId = playerId;
     return player;
+  }
+
+  uniqueHumanName(name, playerId = null) {
+    const taken = (candidate) => [...this.players.values()].some((player) => (
+      !player.isBot
+      && player.id !== playerId
+      && player.name.toLocaleLowerCase() === candidate.toLocaleLowerCase()
+    ));
+    if (!taken(name)) return name;
+    for (let suffix = 2; suffix < 100; suffix += 1) {
+      const tag = `-${suffix}`;
+      const candidate = `${[...name].slice(0, 24 - tag.length).join('')}${tag}`;
+      if (!taken(candidate)) return candidate;
+    }
+    return generateCallsign();
+  }
+
+  setPlayerName(playerId, name) {
+    const player = this.players.get(playerId);
+    if (!player || player.isBot) return;
+    const sanitized = sanitizePlayerName(name);
+    const preferred = sanitized.toLowerCase() === 'miner' ? generateCallsign() : sanitized;
+    player.name = this.uniqueHumanName(preferred, playerId);
   }
 
   removeClient(playerId) {
@@ -133,7 +171,17 @@ class Room {
   }
 
   setSettings(playerId, settings = {}) {
-    if (playerId !== this.hostId) return false;
+    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can change settings' };
+    if (settings.variantMode !== undefined) {
+      const variantMode = String(settings.variantMode);
+      if (!['random', 'lwma90', 'lwma45_tip004'].includes(variantMode)) {
+        return { ok: false, error: 'Unknown network variant mode' };
+      }
+      if (this.running || this.challenge) {
+        return { ok: false, error: 'Network variant can only change between challenges' };
+      }
+      this.variantMode = variantMode;
+    }
     if (Number.isFinite(settings.speedup)) {
       this.speedup = Math.max(1, Math.min(600, Number(settings.speedup)));
     }
@@ -149,7 +197,7 @@ class Room {
         }
       }
     }
-    return true;
+    return { ok: true };
   }
 
   leaderboard() {
@@ -208,6 +256,7 @@ class Room {
       winnerId: this.winnerId,
       penalty: this.penalty,
       windowSize: this.windowSize,
+      variantMode: this.variantMode,
       speedup: this.speedup,
       goalBlocks: this.goalBlocks,
       height: this.height,
@@ -278,8 +327,23 @@ class Room {
     return this.start(playerId);
   }
 
+  returnToSetup(playerId) {
+    if (playerId !== this.hostId) return { ok: false, error: 'Only the host can return to setup' };
+    if (this.running) return { ok: false, error: 'A challenge is already running' };
+    if (!this.roundOver) return { ok: false, error: 'The current round is not complete' };
+    this._removeBots();
+    this.challenge = null;
+    this.objective = null;
+    this.shadow = null;
+    this.lastResult = null;
+    this._resetScoresAndChain(true);
+    this.broadcast({ type: 'status', message: 'Ready — choose a network variant or start the next challenge', running: false });
+    this.broadcastState();
+    return { ok: true };
+  }
+
   _armChallenge() {
-    this.challenge = drawChallenge(this.rng);
+    this.challenge = drawChallenge(this.rng, this.variantMode);
     this.objective = new ObjectiveTracker(this.challenge);
     this.lastResult = null;
 
@@ -388,6 +452,8 @@ class Room {
     this.lastResult = {
       ...result,
       challenge: publicChallenge(this.challenge),
+      assignmentMode: this.challenge.assignmentMode || 'randomized',
+      selectedVariant: this.challenge.variant.id,
       mvpName: mvp?.name || null,
       humans: humans.length,
     };
@@ -400,6 +466,8 @@ class Room {
       challengeName: this.challenge.name,
       variant: this.challenge.variant.id,
       variantLabel: this.challenge.variant.label,
+      assignmentMode: this.challenge.assignmentMode || 'randomized',
+      selectedVariant: this.challenge.variant.id,
       humans: humans.length,
       blocks: this.height,
       ...result,

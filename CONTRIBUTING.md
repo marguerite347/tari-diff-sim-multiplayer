@@ -10,6 +10,9 @@ Thanks for helping! This is a community **research game**: every finished round 
   - [add-network-variant](skills/add-network-variant/SKILL.md) — a new candidate network config to test
   - [add-battlefield-visual](skills/add-battlefield-visual/SKILL.md) — Three.js battlefield effects
   - [tune-copilot-strategy](skills/tune-copilot-strategy/SKILL.md) — autopilot behavior and narration
+- **[Network candidate process](docs/research-candidate-process.md)** — proposal, exploratory evidence, review, registry, and eligibility for official randomized research
+- **[Challenge proposal process](docs/challenge-proposal-process.md)** — community stress-test design, seeded two-variant balance evidence, review, and pool inclusion
+- **[candidates/](candidates/README.md)** — machine-readable candidate registry; validate it with `npm run validate:candidates`
 
 ## Quick start
 
@@ -25,5 +28,7 @@ npm start   # http://localhost:8787
 - [ ] Server changes: restarted the server and confirmed a full round completes and records
 - [ ] No simulation invariants broken (see [AGENTS.md](AGENTS.md#simulation-invariants--never-break-these))
 - [ ] Round-result schema, challenge ids, and variant ids unchanged — or the change is prominently flagged in the PR description
+- [ ] Candidate changes follow the governance process; manual evidence is not mixed into randomized aggregates; `npm run validate:candidates` passes
+- [ ] New challenges follow the challenge proposal process and include seeded ignored/human/Copilot evidence across both builtin variants
 - [ ] Nothing from `data/` or `assets/skyboxes/` staged (`git status` before committing)
 - [ ] Plain JS, no new frameworks/build steps; UPPERCASE arcade copy for player-facing HUD text

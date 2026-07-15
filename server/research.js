@@ -38,10 +38,12 @@ function loadRounds() {
   }
 }
 
-function aggregate() {
+function aggregate(assignmentMode = 'randomized') {
   const rounds = loadRounds();
   const groups = new Map();
   for (const round of rounds) {
+    const roundMode = round.assignmentMode === 'manual' ? 'manual' : 'randomized';
+    if (roundMode !== assignmentMode) continue;
     const simulationVersion = round.simulationVersion || 'legacy';
     const key = `${simulationVersion}::${round.challenge}::${round.variant}`;
     if (!groups.has(key)) {
@@ -51,6 +53,7 @@ function aggregate() {
         challengeName: round.challengeName,
         variant: round.variant,
         variantLabel: round.variantLabel,
+        assignmentMode: roundMode,
         rounds: 0,
         wins: 0,
         stabilitySum: 0,
@@ -89,6 +92,7 @@ function aggregate() {
     challengeName: g.challengeName,
     variant: g.variant,
     variantLabel: g.variantLabel,
+    assignmentMode: g.assignmentMode,
     rounds: g.rounds,
     winRate: g.rounds ? Number((g.wins / g.rounds).toFixed(3)) : 0,
     avgStability: g.rounds ? Number((g.stabilitySum / g.rounds).toFixed(3)) : 0,

@@ -53,7 +53,7 @@
                 <p class="mp-title-kicker">Pilot briefing</p>
                 <h2 class="mp-victory-logo">HOW TO PLAY</h2>
                 <ol class="mp-tutorial-steps">
-                    <li><strong>Suit up.</strong> Enter a callsign, then create a new game or join with a friend&rsquo;s room code. The host starts the challenge and can pause, resume, or abandon an active round.</li>
+                    <li><strong>Suit up.</strong> You get a generated callsign that you can edit, then create a new game or join with a friend&rsquo;s room code. The host starts the challenge and can pause, resume, or abandon an active round.</li>
                     <li><strong>Read the mission HUD.</strong> Every round a scripted attacker messes with the network. Your objective stays at the top: keep block times stable, or keep any one algo below its share limit.</li>
                     <li><strong>Work the sliders.</strong> The 4 sliders are your mining rigs across the 4 proof-of-work algos. Moving hash toward or away from a lane pushes its difficulty up or down via the LWMA.</li>
                     <li><strong>Read the battlefield.</strong> It&rsquo;s tower defense: army color identifies the algorithm, black armor with a warning horn marks attackers, and white helmet diamonds mark your squad. The closer attackers get to the chain tower, the more compromised that lane is. Each lane&rsquo;s wall is its difficulty; a rising wall (and TIP-004 freezes) drives invaders back. Watch for orphans (two blocks found at once — one crumbles) and shadow miners stacking ghost blocks to rewrite the chain.</li>
@@ -72,6 +72,39 @@
             </div>
         </div>
 
+        <div id="mpExperimentDialog" class="mp-victory" role="dialog" aria-modal="true" aria-labelledby="mpExperimentTitle" hidden>
+            <div class="mp-victory-card mp-experiment-card">
+                <button id="mpExperimentClose" class="mp-tutorial-close" aria-label="Close network experiment explainer">&times;</button>
+                <p class="mp-title-kicker">Research treatment</p>
+                <h2 id="mpExperimentTitle" class="mp-victory-logo">THE NETWORK EXPERIMENT</h2>
+                <div class="mp-experiment-copy">
+                    <section>
+                        <h3>STATUS QUO · LWMA-90 · NO PENALTY</h3>
+                        <p>Difficulty uses a 90-block weighted window, so it responds more slowly and smoothly to hashrate changes.</p>
+                    </section>
+                    <section>
+                        <h3>CANDIDATE · LWMA-45 + TIP-004</h3>
+                        <p>A 45-block weighted window reacts faster to hashrate changes.</p>
+                    </section>
+                    <section>
+                        <h3>TIP-004 STREAK PENALTY</h3>
+                        <p>When the same PoW algorithm wins consecutive blocks, its target interval is multiplied by 2<sup>consecutive</sup>: 2× after one prior consecutive win, then 4×, 8×, and so on. That increases effective difficulty and slowdown pressure, discouraging one algorithm from dominating a streak.</p>
+                    </section>
+                    <section>
+                        <h3>WHY RANDOM</h3>
+                        <p>Random A/B is the default and produces official comparative research. Random assignment lets completed rounds compare objective success, stability, mean block time, orphan count, deepest reorg, longest block wait, and difficulty swing under similar attacks.</p>
+                    </section>
+                    <p class="mp-experiment-note">Hosts may select Status Quo or Candidate between rounds for targeted exploration. Manually selected rounds are tagged exploratory and excluded from the official randomized aggregate. Window and penalty lock during a challenge; speed changes viewing pace only.</p>
+                </div>
+                <div class="mp-community-proposals">
+                    <p>Challenges are community-designed stress tests; candidates are proposed network rule changes.</p>
+                    <a class="mp-candidate-link" href="https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=challenge-proposal.yml" target="_blank" rel="noopener">Propose a challenge ↗</a>
+                    <a class="mp-candidate-link" href="https://github.com/marguerite347/tari-diff-sim-multiplayer/issues/new?template=network-candidate.yml" target="_blank" rel="noopener">Propose a network candidate ↗</a>
+                </div>
+                <button id="mpExperimentDone" class="mp-arcade-btn primary">Close</button>
+            </div>
+        </div>
+
         <div id="mpLobby" class="mp-title-screen">
             <div class="mp-title-glow" aria-hidden="true"></div>
             <p class="mp-title-kicker">Tari LWMA network · TIP-004 rules</p>
@@ -80,7 +113,7 @@
 
             <div class="mp-title-form">
                 <label>Callsign
-                    <input id="mpName" type="text" maxlength="24" placeholder="MINER" value="Miner">
+                    <input id="mpName" type="text" maxlength="24" placeholder="MINER-EMBER-47">
                 </label>
                 <label>Room code
                     <input id="mpRoomCode" type="text" maxlength="8" placeholder="ABCDE" style="text-transform:uppercase">
@@ -104,8 +137,12 @@
                     <h2 id="mpVictoryTitle" class="mp-victory-logo">WINNER</h2>
                     <p id="mpVictoryVerdict" class="mp-victory-verdict" hidden></p>
                     <p id="mpVictorySub"></p>
+                    <p><span id="mpResultAssignmentBadge" class="mp-assignment-badge"></span></p>
                     <div id="mpVictoryStats" class="mp-result-stats"></div>
-                    <button id="mpVictoryDismiss" class="mp-arcade-btn primary">CONTINUE TO NEXT CHALLENGE</button>
+                    <div class="mp-result-actions">
+                        <button id="mpVictoryDismiss" class="mp-arcade-btn primary">CONTINUE TO NEXT CHALLENGE</button>
+                        <button id="mpVictorySetup" class="mp-arcade-btn">RETURN TO SETUP</button>
+                    </div>
                 </div>
             </div>
             <div id="mpChallengeCard" class="mp-victory" hidden>
@@ -115,6 +152,7 @@
                     <p id="mpChallengeBrief" class="mp-challenge-brief"></p>
                     <p class="mp-challenge-meta">
                         <span id="mpChallengeVariant" class="mp-variant-chip"></span>
+                        <span id="mpAssignmentBadge" class="mp-assignment-badge"></span>
                     </p>
                     <p id="mpChallengeObjective" class="mp-challenge-objective"></p>
                     <p class="mp-challenge-scoring">Meet this objective at round end. Stats marked SCORED decide the result.</p>
@@ -208,7 +246,16 @@
                     </div>
                     <div id="mpHostControls" class="mp-host-grid">
                         <label>Speed <input id="mpSpeedup" type="number" min="1" max="600" value="30"></label>
-                        <span class="mp-host-note">Window &amp; TIP-004 penalty are dealt by the challenge draw — that&rsquo;s the experiment.</span>
+                    </div>
+                    <div class="mp-variant-control">
+                        <label>Network variant
+                            <select id="mpVariantMode">
+                                <option value="random">RANDOM A/B</option>
+                                <option value="lwma90">STATUS QUO · LWMA-90</option>
+                                <option value="lwma45_tip004">CANDIDATE · LWMA-45 + TIP-004</option>
+                            </select>
+                        </label>
+                        <span class="mp-host-note">Window &amp; TIP-004 penalty are the experimental treatment. <button id="mpExperimentHelp" class="mp-inline-help" type="button" aria-label="Explain the network experiment" title="Explain the network experiment">?</button></span>
                     </div>
                     <div id="mpRoundControls" class="mp-deck-buttons">
                         <button id="mpStart" class="mp-arcade-btn primary">&#9654; Start challenge</button>
@@ -223,8 +270,7 @@
                     <div class="mp-copilot-head">
                         <button id="mpCopilotToggle" class="mp-arcade-btn">Autopilot: OFF</button>
                         <button id="mpCopilotMemory" class="mp-arcade-btn small">Memory</button>
-                        <button id="mpLlmBrain" class="mp-arcade-btn small">Brain: HEURISTIC</button>
-                        <button id="mpLlmGear" class="mp-arcade-btn small" title="LLM bridge settings">&#9881;</button>
+                        <button id="mpLlmBrain" class="mp-arcade-btn small" aria-controls="mpLlmPanel" aria-expanded="false">Brain: HEURISTIC</button>
                         <span class="mp-copilot-hint">The agent runs your rigs, explains every move, and learns from each postmortem.</span>
                     </div>
                     <div id="mpLlmPanel" class="mp-llm-panel" hidden>
@@ -253,9 +299,13 @@
                             </label>
                         </div>
                         <div class="mp-llm-actions">
+                            <button id="mpLlmEnabled" class="mp-arcade-btn small">Use LLM advisor: OFF</button>
                             <button id="mpLlmTest" class="mp-arcade-btn small">Test</button>
+                            <button id="mpLlmContextSync" class="mp-arcade-btn small">Sync repo context</button>
+                            <span id="mpLlmContextStatus" class="mp-llm-sync-status">Not synced</span>
                             <span class="mp-llm-note">Key goes directly to your provider. Use a dedicated, spend-capped key. Leave Remember off on shared devices.</span>
                         </div>
+                        <div class="mp-llm-note mp-llm-context-note">Loads the repo&rsquo;s curated AGENTS/rules/skills context; it does not upload your key or the full repository.</div>
                     </div>
                     <div id="mpCopilotLog" class="mp-copilot-log">
                         <div class="dim mp-copilot-empty">Autopilot is off. Flip it on and I&rsquo;ll play this round for you, narrating my decisions and why.</div>

@@ -13,6 +13,8 @@
  */
 const LLMBridge = (function () {
   const SETTINGS_KEY = 'copilotLLM.v1';
+  const CONTEXT_CACHE_PREFIX = 'copilotLLM.context.v1.';
+  const MAX_PROMPT_CONTEXT_CHARS = 6000;
   const TIMEOUT_MS = 4000;
 
   const PRESETS = {
@@ -40,6 +42,8 @@ const LLMBridge = (function () {
 
   let settings = loadSettings();
   let uiLog = null; // copilot log fn injected by multiplayer.js
+  let repoContext = null;
+  let repoContextPromise = null;
 
   function loadSettings() {
     const defaults = {
@@ -90,8 +94,18 @@ const LLMBridge = (function () {
     return '';
   }
 
+  function configurationIssue() {
+    const urlError = baseUrlError();
+    if (urlError) return { fieldId: 'mpLlmBaseUrl', message: urlError };
+    if (!settings.model) return { fieldId: 'mpLlmModel', message: 'Set a model first.' };
+    if (['openrouter', 'openai'].includes(settings.preset) && !settings.apiKey) {
+      return { fieldId: 'mpLlmKey', message: `Set an API key for ${PRESETS[settings.preset].label} first.` };
+    }
+    return null;
+  }
+
   /** Configured well enough to attempt calls. */
-  function isConfigured() { return !!(settings.model && !baseUrlError()); }
+  function isConfigured() { return configurationIssue() === null; }
 
   /** The LLM brain is switched on AND usable. */
   function isActive() { return settings.enabled && isConfigured(); }
@@ -203,10 +217,131 @@ const LLMBridge = (function () {
     btn.classList.toggle('primary', isActive());
   }
 
+  function renderEnabledButton() {
+    const btn = el('mpLlmEnabled');
+    if (!btn) return;
+    btn.textContent = `Use LLM advisor: ${isActive() ? 'ON' : 'OFF'}`;
+    btn.classList.toggle('primary', isActive());
+  }
+
+  function setPanelOpen(open) {
+    const panel = el('mpLlmPanel');
+    const btn = el('mpLlmBrain');
+    if (panel) panel.hidden = !open;
+    if (btn) btn.setAttribute('aria-expanded', String(open));
+  }
+
+  function clearFieldError(fieldId) {
+    const input = el(fieldId);
+    if (!input) return;
+    input.classList.remove('mp-llm-invalid');
+    if (fieldId !== 'mpLlmBaseUrl') input.setCustomValidity('');
+  }
+
+  function showConfigurationIssue(issue) {
+    setPanelOpen(true);
+    const input = el(issue.fieldId);
+    if (input) {
+      input.setCustomValidity(issue.message);
+      input.classList.add('mp-llm-invalid');
+      input.focus();
+      input.reportValidity();
+      requestAnimationFrame(() => input.focus());
+    }
+    uiLog?.(`LLM bridge: advisor remains OFF — ${issue.message}`, 'alert');
+  }
+
+  function contextVersionLabel(bundle) {
+    return bundle?.version?.commit
+      ? bundle.version.commit.slice(0, 7)
+      : `v${bundle?.version?.packageVersion || bundle?.schemaVersion || '?'}`;
+  }
+
+  function renderContextStatus(state, detail = '') {
+    const status = el('mpLlmContextStatus');
+    if (!status) return;
+    status.textContent = state === 'synced'
+      ? `Synced · ${detail}`
+      : (state === 'syncing' ? 'Syncing…' : 'Not synced');
+    status.classList.toggle('synced', state === 'synced');
+    status.classList.toggle('failed', state === 'failed');
+  }
+
+  function contextCacheKey(bundle) {
+    return `${CONTEXT_CACHE_PREFIX}${bundle.version?.buildId || bundle.schemaVersion}`;
+  }
+
+  function readCachedContext(bundle) {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(contextCacheKey(bundle)));
+      return cached?.schemaVersion === bundle.schemaVersion ? cached : null;
+    } catch { return null; }
+  }
+
+  function cacheContext(bundle) {
+    try { sessionStorage.setItem(contextCacheKey(bundle), JSON.stringify(bundle)); }
+    catch { /* context still remains available in memory */ }
+  }
+
+  async function syncRepoContext({ force = false } = {}) {
+    if (repoContext && !force) {
+      renderContextStatus('synced', contextVersionLabel(repoContext));
+      return repoContext;
+    }
+    if (repoContextPromise && !force) return repoContextPromise;
+    renderContextStatus('syncing');
+    repoContextPromise = fetch('/api/llm-context', {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: force ? 'no-cache' : 'default',
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const bundle = await res.json();
+      if (bundle?.schemaVersion !== 1 || !Array.isArray(bundle.sources) || !bundle.version?.buildId) {
+        throw new Error('invalid context bundle');
+      }
+      repoContext = force ? bundle : (readCachedContext(bundle) || bundle);
+      cacheContext(repoContext);
+      renderContextStatus('synced', contextVersionLabel(repoContext));
+      return repoContext;
+    }).catch((err) => {
+      renderContextStatus('failed');
+      uiLog?.(`LLM bridge: repo context sync unavailable (${err.message || err}); built-in game context remains active.`, 'sys');
+      return null;
+    }).finally(() => {
+      repoContextPromise = null;
+    });
+    return repoContextPromise;
+  }
+
+  function repoContextPrompt() {
+    if (!repoContext) return '';
+    const wanted = [
+      ['AGENTS.md', ['What this project is', 'Simulation invariants — never break these']],
+      ['.cursor/rules/simulation-invariants.mdc', ['Never break']],
+      ['.cursor/rules/research-data.mdc', ['Objective types']],
+      ['skills/tune-copilot-strategy/SKILL.md', ['Architecture']],
+    ];
+    const chunks = [];
+    wanted.forEach(([name, headings]) => {
+      const source = repoContext.sources.find((item) => item.name === name);
+      if (!source) return;
+      source.sections
+        .filter((section) => headings.includes(section.heading))
+        .forEach((section) => chunks.push(section.text));
+    });
+    const text = chunks.join('\n\n');
+    if (!text) return '';
+    const version = contextVersionLabel(repoContext);
+    return `CURATED REPOSITORY CONTEXT (${version}; read-only public docs):\n${text.slice(0, MAX_PROMPT_CONTEXT_CHARS)}`;
+  }
+
   function renderBaseUrlValidity() {
     const input = el('mpLlmBaseUrl');
     if (!input) return;
-    input.setCustomValidity(baseUrlError());
+    const error = baseUrlError();
+    input.setCustomValidity(error);
+    input.classList.toggle('mp-llm-invalid', !!error);
   }
 
   function fillForm() {
@@ -224,17 +359,25 @@ const LLMBridge = (function () {
   function initUI({ log } = {}) {
     uiLog = log || null;
 
-    el('mpLlmGear')?.addEventListener('click', () => {
+    if (settings.enabled && !isConfigured()) {
+      settings.enabled = false;
+      saveSettings();
+    }
+
+    el('mpLlmBrain')?.addEventListener('click', () => {
       const panel = el('mpLlmPanel');
-      if (panel) panel.hidden = !panel.hidden;
+      setPanelOpen(panel?.hidden === true);
     });
 
     el('mpLlmPreset')?.addEventListener('change', (e) => {
       settings.preset = e.target.value;
       const preset = PRESETS[settings.preset];
       if (preset && preset.baseUrl) settings.baseUrl = preset.baseUrl;
+      if (settings.enabled && !isConfigured()) settings.enabled = false;
       saveSettings();
       fillForm();
+      renderEnabledButton();
+      renderBrainButton();
     });
     el('mpLlmBaseUrl')?.addEventListener('change', (e) => {
       settings.baseUrl = e.target.value.trim();
@@ -245,6 +388,9 @@ const LLMBridge = (function () {
         e.target.reportValidity();
       }
     });
+    el('mpLlmBaseUrl')?.addEventListener('input', () => clearFieldError('mpLlmBaseUrl'));
+    el('mpLlmModel')?.addEventListener('input', () => clearFieldError('mpLlmModel'));
+    el('mpLlmKey')?.addEventListener('input', () => clearFieldError('mpLlmKey'));
     el('mpLlmModel')?.addEventListener('change', (e) => { settings.model = e.target.value.trim(); saveSettings(); });
     el('mpLlmKey')?.addEventListener('change', (e) => { settings.apiKey = e.target.value.trim(); saveSettings(); });
     el('mpLlmRememberKey')?.addEventListener('change', (e) => {
@@ -263,15 +409,27 @@ const LLMBridge = (function () {
       );
     });
 
-    el('mpLlmBrain')?.addEventListener('click', () => {
-      if (!settings.enabled && !isConfigured()) {
-        uiLog?.('LLM bridge: set a base URL and model (gear button) before switching the brain to LLM.', 'sys');
-        const panel = el('mpLlmPanel');
-        if (panel) panel.hidden = false;
-        return;
+    el('mpLlmContextSync')?.addEventListener('click', () => {
+      syncRepoContext({ force: true });
+    });
+
+    el('mpLlmEnabled')?.addEventListener('click', () => {
+      if (!settings.enabled) {
+        const issue = configurationIssue();
+        if (issue) {
+          settings.enabled = false;
+          saveSettings();
+          renderEnabledButton();
+          renderBrainButton();
+          showConfigurationIssue(issue);
+          return;
+        }
+        settings.enabled = true;
+      } else {
+        settings.enabled = false;
       }
-      settings.enabled = !settings.enabled;
       saveSettings();
+      renderEnabledButton();
       renderBrainButton();
       uiLog?.(
         settings.enabled
@@ -281,11 +439,20 @@ const LLMBridge = (function () {
       );
     });
 
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !el('mpLlmPanel')?.hidden) {
+        setPanelOpen(false);
+        return;
+      }
+    });
+
     fillForm();
+    renderEnabledButton();
     renderBrainButton();
+    syncRepoContext();
   }
 
-  return { initUI, isActive, isConfigured, requestGuidance, test };
+  return { initUI, isActive, isConfigured, repoContextPrompt, requestGuidance, syncRepoContext, test };
 })();
 
 if (typeof window !== 'undefined') window.LLMBridge = LLMBridge;

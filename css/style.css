@@ -1363,6 +1363,13 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     color: #6b7c9e;
     letter-spacing: 0.03em;
 }
+.mp-research-section-title {
+    margin: 14px 0 8px;
+    color: #3dffa2;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+}
+.mp-research-section-title.exploratory { color: #ffb640; }
 .mp-race-fill.bad { background: linear-gradient(90deg, #ff4d5e, #ffb640); }
 .mp-bf-status.bad { background: rgba(255, 77, 94, 0.85); color: #fff; }
 .mp-pill.bot { background: rgba(255, 77, 94, 0.25); color: #ff8d99; }
@@ -1371,6 +1378,124 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     font-size: 11px;
     color: #8ea0c0;
     align-self: center;
+}
+.mp-variant-control {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+    margin-top: 10px;
+}
+.mp-variant-control label {
+    display: grid;
+    gap: 4px;
+    color: var(--arc-dim);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.mp-variant-control select {
+    max-width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--arc-line);
+    border-radius: 4px;
+    background: #05060c;
+    color: var(--arc-text);
+}
+.mp-variant-control select:disabled { opacity: 0.65; }
+.mp-inline-help {
+    width: 22px;
+    height: 22px;
+    margin-left: 4px;
+    border: 1px solid var(--arc-cyan);
+    border-radius: 50%;
+    background: rgba(55, 182, 255, 0.1);
+    color: var(--arc-cyan);
+    font: 700 12px/1 monospace;
+    cursor: pointer;
+}
+.mp-inline-help:hover,
+.mp-inline-help:focus-visible {
+    background: var(--arc-cyan);
+    color: #05060c;
+    outline: 2px solid rgba(55, 182, 255, 0.35);
+    outline-offset: 2px;
+}
+.mp-experiment-card {
+    width: min(620px, calc(100vw - 28px));
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    border-color: var(--arc-cyan);
+    text-align: left;
+}
+.mp-experiment-card .mp-victory-logo {
+    color: var(--arc-cyan);
+    font-size: clamp(24px, 6vw, 38px);
+}
+.mp-experiment-copy {
+    display: grid;
+    gap: 10px;
+    margin: 16px 0;
+}
+.mp-experiment-copy section {
+    padding-left: 10px;
+    border-left: 2px solid var(--arc-cyan);
+}
+.mp-experiment-copy h3 {
+    margin: 0 0 4px;
+    color: #f0f5ff;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+}
+.mp-experiment-copy p {
+    margin: 0;
+    color: #b5c2dc;
+    font-size: 12px;
+    line-height: 1.5;
+}
+.mp-experiment-copy .mp-experiment-note {
+    padding: 8px;
+    border: 1px dashed var(--arc-line);
+    color: #ffcf70;
+}
+.mp-candidate-link {
+    display: inline-block;
+    margin: 0 12px 12px 0;
+    color: var(--arc-cyan);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.mp-community-proposals {
+    margin-bottom: 12px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--arc-line);
+}
+.mp-community-proposals p {
+    margin: 0 0 7px;
+    color: #8ea0c0;
+    font-size: 10px;
+}
+.mp-assignment-badge {
+    display: inline-block;
+    padding: 3px 6px;
+    border: 1px solid rgba(61, 255, 162, 0.45);
+    border-radius: 3px;
+    color: #3dffa2;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+.mp-assignment-badge.manual {
+    border-color: rgba(255, 182, 64, 0.55);
+    color: #ffb640;
+}
+.mp-result-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
 }
 
 /* --- Copilot agent --- */
@@ -1454,10 +1579,24 @@ body.mp-flash { animation: mpFlash 0.28s ease; }
     outline: none;
     border-color: #c77dff;
 }
+.mp-llm-grid input.mp-llm-invalid {
+    border-color: #ff4d5e;
+    box-shadow: 0 0 0 2px rgba(255, 77, 94, 0.18);
+}
 .mp-llm-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     margin-top: 8px;
 }
 .mp-llm-note { font-size: 10px; color: #8ea0c0; }
+.mp-llm-context-note { margin-top: 7px; }
+.mp-llm-sync-status {
+    color: #8ea0c0;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+.mp-llm-sync-status.synced { color: #3dffa2; }
+.mp-llm-sync-status.failed { color: #ff4d5e; }

@@ -5,11 +5,14 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
-const { RoomManager, sanitizePlayerName } = require('./room');
+const { RoomManager } = require('./room');
 const { aggregate, archiveAndReset } = require('./research');
+const { buildLlmContext } = require('./llm-context');
 
 const PORT = Number(process.env.PORT || 8787);
 const ROOT = path.join(__dirname, '..');
+const SERVER_STARTED_AT = Date.now();
+const LLM_CONTEXT = buildLlmContext(new Date(SERVER_STARTED_AT).toISOString());
 const MAX_ACTIVE_ROOMS = 100;
 const MAX_HUMANS_PER_ROOM = 32;
 const MESSAGE_RATE_LIMIT = 30;
@@ -85,7 +88,17 @@ function resetRateLimited(req) {
 }
 
 app.get('/api/research', (req, res) => {
-  res.json({ ok: true, ...resetCapability(req), results: aggregate() });
+  res.json({
+    ok: true,
+    ...resetCapability(req),
+    results: aggregate('randomized'),
+    exploratoryResults: aggregate('manual'),
+  });
+});
+
+app.get('/api/llm-context', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(LLM_CONTEXT);
 });
 
 app.post('/api/research/reset', (req, res) => {
@@ -116,8 +129,6 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 const rooms = new RoomManager();
 
-const SERVER_STARTED_AT = Date.now();
-
 // Per-room debug snapshot for handing to a debugging agent. Localhost research
 // tool — no auth, but only plain JSON (never socket objects) leaves here.
 app.get('/api/debug/:roomCode', (req, res) => {
@@ -147,6 +158,7 @@ app.get('/api/debug/:roomCode', (req, res) => {
     roomCode: room.code,
     running: room.running,
     roundOver: room.roundOver,
+    variantMode: room.variantMode,
     winnerId: room.winnerId,
     height: room.height,
     hostPresent: !!host,
@@ -166,6 +178,8 @@ app.get('/api/debug/:roomCode', (req, res) => {
           id: room.challenge.id,
           name: room.challenge.name,
           variantId: room.challenge.variant?.id ?? null,
+          selectedVariant: room.challenge.variant?.id ?? null,
+          assignmentMode: room.challenge.assignmentMode || 'randomized',
           durationBlocks: room.challenge.durationBlocks,
         }
       : null,
@@ -217,6 +231,7 @@ wss.on('connection', (ws, req) => {
   ws.playerId = playerIdFromResumeToken(requestedResume) || newPlayerId();
   ws.roomCode = null;
   ws.messageTimestamps = [];
+  ws.nextChallengeResponses = new Map();
 
   send(ws, { type: 'hello', playerId: ws.playerId, resumeToken: resumeToken(ws.playerId) });
 
@@ -270,7 +285,7 @@ function handleMessage(ws, msg) {
       leaveRoom(ws);
       const room = rooms.create();
       room.hostId = ws.playerId;
-      room.addClient(ws.playerId, ws, msg.name || 'Host');
+      room.addClient(ws.playerId, ws, msg.name);
       ws.roomCode = room.code;
       send(ws, room.snapshot(ws.playerId));
       break;
@@ -287,7 +302,7 @@ function handleMessage(ws, msg) {
       }
       leaveRoom(ws);
       if (!room.hostId) room.hostId = ws.playerId;
-      room.addClient(ws.playerId, ws, msg.name || 'Miner');
+      room.addClient(ws.playerId, ws, msg.name);
       ws.roomCode = room.code;
       room.broadcastState();
       break;
@@ -295,8 +310,7 @@ function handleMessage(ws, msg) {
     case 'set_name': {
       const room = rooms.get(ws.roomCode);
       if (!room) return;
-      const player = room.players.get(ws.playerId);
-      if (player) player.name = sanitizePlayerName(msg.name);
+      room.setPlayerName(ws.playerId, msg.name);
       room.broadcastState();
       break;
     }
@@ -310,8 +324,8 @@ function handleMessage(ws, msg) {
     case 'set_settings': {
       const room = rooms.get(ws.roomCode);
       if (!room) return;
-      const ok = room.setSettings(ws.playerId, msg.settings || {});
-      if (!ok) return send(ws, { type: 'error', error: 'Only the host can change settings' });
+      const result = room.setSettings(ws.playerId, msg.settings || {});
+      if (!result.ok) return send(ws, { type: 'error', error: result.error });
       room.broadcastState();
       break;
     }
@@ -324,10 +338,48 @@ function handleMessage(ws, msg) {
     }
     case 'continue':
     case 'next_challenge': {
+      const requestId = typeof msg.requestId === 'string' ? msg.requestId.slice(0, 64) : null;
+      if (requestId && ws.nextChallengeResponses.has(requestId)) {
+        send(ws, ws.nextChallengeResponses.get(requestId));
+        break;
+      }
       const room = rooms.get(ws.roomCode);
-      if (!room) return;
+      if (!room) {
+        const response = {
+          type: 'next_challenge_result',
+          requestId,
+          ok: false,
+          error: 'Room not found; rejoin or create a new room',
+        };
+        if (requestId) ws.nextChallengeResponses.set(requestId, response);
+        send(ws, response);
+        break;
+      }
       const result = room.nextChallenge(ws.playerId);
-      if (!result.ok) send(ws, { type: 'error', error: result.error });
+      const response = {
+        type: 'next_challenge_result',
+        requestId,
+        ok: result.ok,
+        ...(result.ok ? { challengeId: room.challenge?.id || null } : { error: result.error }),
+      };
+      if (requestId) {
+        ws.nextChallengeResponses.set(requestId, response);
+        if (ws.nextChallengeResponses.size > 10) {
+          ws.nextChallengeResponses.delete(ws.nextChallengeResponses.keys().next().value);
+        }
+      }
+      send(ws, response);
+      break;
+    }
+    case 'return_to_setup': {
+      const room = rooms.get(ws.roomCode);
+      if (!room) return send(ws, { type: 'error', error: 'Room not found; rejoin or create a new room' });
+      const result = room.returnToSetup(ws.playerId);
+      send(ws, {
+        type: 'return_to_setup_result',
+        ok: result.ok,
+        ...(result.ok ? {} : { error: result.error }),
+      });
       break;
     }
     case 'stop': {

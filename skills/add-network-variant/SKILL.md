@@ -5,7 +5,7 @@ description: Add a candidate Tari network configuration to VARIANTS in server/ch
 
 # Add a network variant (candidate config)
 
-The whole point of this game is comparing network configurations under identical attacks. `VARIANTS` in `server/challenges.js` holds the configs under test — currently `lwma90` (status quo: LWMA-90, no penalty) and `lwma45_tip004` (proposed: LWMA-45 + TIP-004 penalty). `drawChallenge` attaches one uniformly at random to every round.
+The whole point of this game is comparing network configurations under identical attacks. Before changing `VARIANTS`, follow `docs/research-candidate-process.md`, add an immutable entry under `candidates/`, and run `npm run validate:candidates`. Submission and exploratory testing do not automatically make a candidate eligible for official randomized research.
 
 **Read `server/challenges.js` and `server/room.js` first** — details may have drifted.
 
@@ -21,6 +21,8 @@ These are the only knobs today. If your candidate config needs a new knob (diffe
 
 ## 2. Add the entry
 
+Use host-only manual selection for exploratory evidence first. Those rows must be tagged `assignmentMode: manual` and excluded from the official aggregate. Adding a candidate to the randomized pool requires sufficient reproducible evidence and explicit maintainer approval.
+
 ```js
 {
   id: 'lwma60',                          // stable, NEVER reuse a retired id
@@ -34,7 +36,7 @@ These are the only knobs today. If your candidate config needs a new knob (diffe
 
 ## 3. Understand the research cost
 
-Variants are drawn **uniformly**. Each addition dilutes rounds per (challenge, variant) cell: with 5 challenges and 3 variants there are 15 cells, and a credible win-rate comparison needs many rounds per cell. Only add a variant the community actually wants tested, and say so in the PR. Removing a variant later is fine (old data still aggregates); its id stays retired.
+Official variants are drawn **uniformly** in randomized mode. Each addition dilutes rounds per (challenge, variant) cell: with 5 challenges and 3 variants there are 15 cells, and a credible win-rate comparison needs many rounds per cell. Only approved, evidenced candidates belong in that pool. Removing a variant later is fine (old data still aggregates); its id stays retired in both code history and the registry.
 
 ## 4. Verify
 

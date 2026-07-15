@@ -6,7 +6,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js"
+    "dev": "node server/index.js",
+    "validate:candidates": "node scripts/validate-candidates.js"
   },
   "engines": {
     "node": ">=18"

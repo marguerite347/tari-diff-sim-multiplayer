@@ -1,0 +1,79 @@
+name: Network research candidate
+description: Propose a network configuration for exploratory review
+title: "[NETWORK CANDIDATE] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the [candidate process](https://github.com/marguerite347/tari-diff-sim-multiplayer/blob/main/docs/research-candidate-process.md) first. Submission starts review and does not automatically enter the official randomized pool.
+  - type: input
+    id: identity
+    attributes:
+      label: Candidate name and immutable ID
+      description: Use a readable name and a lowercase ID such as lwma60_tip004.
+    validations:
+      required: true
+  - type: input
+    id: author
+    attributes:
+      label: Author/contact
+      description: GitHub handle(s) responsible for the proposal.
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis and network problem
+      description: State a falsifiable hypothesis and the problem this candidate addresses.
+    validations:
+      required: true
+  - type: textarea
+    id: parameters
+    attributes:
+      label: Exact parameter changes
+      description: Compare every changed window, penalty, or future parameter with status quo.
+    validations:
+      required: true
+  - type: textarea
+    id: threat-model
+    attributes:
+      label: Threat model and target challenges
+      description: Which attacks/challenges should improve, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Benefits, tradeoffs, and failure modes
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Metrics and falsifiable acceptance criteria
+      description: Cover success, stability, mean BT, orphans, deepest reorg, longest wait, and difficulty swing.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction, seeds, sample threshold, and baseline
+      description: Include commit/version, commands, seeds/data range, sample counts, and status-quo comparison.
+    validations:
+      required: true
+  - type: textarea
+    id: integrity
+    attributes:
+      label: Research integrity and security
+      description: Explain assignment bias, schema compatibility, sensitive-data boundaries, and abuse/cost risks.
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I understand this proposal starts review and does not automatically join official randomized research.
+          required: true
+        - label: I will not commit raw `data/`, secrets, API keys, or user data.
+          required: true

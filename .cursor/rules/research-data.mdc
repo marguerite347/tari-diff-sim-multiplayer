@@ -10,10 +10,11 @@ Every finished round appends one JSON line to `data/rounds.jsonl` (`recordRound`
 
 ## Schema rules
 
-- Round entries currently carry: `ts`, `room`, `challenge`, `challengeName`, `variant`, `variantLabel`, `humans`, `blocks`, plus the `ObjectiveTracker.evaluate()` fields (`success`, `stability`, `maxShare`, `meanBt`, `penaltyEvents`, `orphans`, `deepestReorg`, `scoredBlocks`).
+- Round entries currently carry: `ts`, `room`, `challenge`, `challengeName`, `variant`, `variantLabel`, `assignmentMode`, `selectedVariant`, `humans`, `blocks`, plus the `ObjectiveTracker.evaluate()` fields (`success`, `stability`, `maxShare`, `meanBt`, `penaltyEvents`, `orphans`, `deepestReorg`, `scoredBlocks`).
 - You may **add** fields (make `aggregate()` default them for old rows, as it already does with `|| 0`). Never rename, remove, or change the meaning/units of existing fields.
 - Never reuse a retired challenge or variant `id` for something different — old rows would be aggregated into the wrong bucket.
 - `aggregate()` must tolerate rows from older versions (missing fields, unknown challenge ids).
+- Missing legacy `assignmentMode` means `randomized`. Rows explicitly tagged `manual` are exploratory and must never be silently mixed into the official aggregate.
 
 ## Objective types
 
@@ -27,6 +28,6 @@ Adding a new type means updating `progress()`, `evaluate()`, and the clients tha
 
 ## Adding a challenge or variant
 
-- New challenge: add a factory to `CHALLENGE_FACTORIES` returning `{ id, name, brief, durationBlocks, scoredFromBlock, objective, bots }` (plus optional `shadow` config for selfish mining). Use the passed `rng`, never `Math.random()`. Keep `publicChallenge` in sync if you add fields the client needs. Test with `FORCE_CHALLENGE=<id> npm start`. See `skills/add-challenge/SKILL.md`.
-- New variant: add to `VARIANTS` (`{ id, label, windowSize, penalty }`). Note `drawChallenge` picks variants uniformly — every new variant dilutes rounds available per config, which slows research convergence; a meaningful comparison needs many rounds per (challenge, variant) cell. See `skills/add-network-variant/SKILL.md`.
+- New challenge: follow `docs/challenge-proposal-process.md`, then add a reviewed factory to `CHALLENGE_FACTORIES` returning `{ id, name, brief, durationBlocks, scoredFromBlock, objective, bots }` (plus optional `shadow`). Use the passed `rng`, never `Math.random()`. Seeded evidence must cover both builtin variants and show the challenge is losable when ignored but winnable through meaningful response. Test with `FORCE_CHALLENGE=<id> npm start`. See `skills/add-challenge/SKILL.md`.
+- New variant: first follow `docs/research-candidate-process.md`, add/validate its immutable entry in `candidates/`, and gather manually selected exploratory evidence. Official randomized inclusion requires sufficient evidence and explicit maintainer approval. See `skills/add-network-variant/SKILL.md`.
 - Never commit `data/` — it's gitignored community research output.

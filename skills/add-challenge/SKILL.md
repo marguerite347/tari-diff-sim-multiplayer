@@ -9,6 +9,8 @@ A challenge is a scripted bot attack drawn at random each round. Humans defend; 
 
 **Read `server/challenges.js` first** — features are frequently in flight and details here may have drifted.
 
+Before implementation, follow `docs/challenge-proposal-process.md`. Pool inclusion requires maintainer review and seeded balance evidence across both builtin variants; opening a proposal does not change runtime behavior.
+
 ## 1. Write the factory
 
 Add a function to the `CHALLENGE_FACTORIES` array in `server/challenges.js`. It receives the room's seeded `rng` (use it for all randomness — never `Math.random()`) and returns:
@@ -76,5 +78,6 @@ FORCE_CHALLENGE=myattack npm start
 2. Watch the attack land: hostile troops on the right lane, difficulty wall rising, ticker narration.
 3. Bump the speedup setting and let the round finish. Confirm the verdict makes sense, a new line lands in `data/rounds.jsonl`, and `/api/research` shows your challenge id.
 4. Play it once trying to win and once idling — a good challenge is losable when ignored and winnable when played. Tune schedule power/timing and objective thresholds until both hold.
+5. Run many recorded seeds under both `lwma90` and `lwma45_tip004`, including ignored, purposeful human, and Copilot play. Declare any timing/window hypothesis; do not tune in an undeclared structural advantage for one variant.
 
 Do not commit `data/rounds.jsonl` (gitignored) or `assets/`.

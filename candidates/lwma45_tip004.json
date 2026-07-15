@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "lwma45_tip004",
+  "name": "LWMA-45 + TIP-004",
+  "status": "approved",
+  "origin": "builtin",
+  "authors": ["@marguerite347"],
+  "hypothesis": "A shorter LWMA window plus an exponential same-algorithm streak penalty improves recovery from abrupt hashrate changes and reduces algorithm dominance without unacceptable chain-health regressions.",
+  "parameters": {
+    "lwmaWindow": 45,
+    "tip004Enabled": true,
+    "tip004PenaltyBase": 2,
+    "statusQuoLwmaWindow": 90,
+    "statusQuoTip004Enabled": false
+  },
+  "threatModel": ["hash floods", "algorithm hopping", "burst-miner whiplash", "selfish mining", "greedy human allocation"],
+  "benefits": ["Faster difficulty response", "Exponential pressure against repeated wins by one PoW algorithm"],
+  "tradeoffs": ["Potentially noisier difficulty", "Penalty-driven stalls may worsen cadence in some power distributions"],
+  "acceptanceCriteria": {
+    "success": "Higher or non-inferior objective success by challenge",
+    "stability": "No material decrease in stable-block fraction",
+    "meanBt": "Mean block time remains centered near the 120 second network target",
+    "orphans": "No material increase in orphan count",
+    "deepestReorg": "No increase in deepest reorg under shadow-miner challenges",
+    "worstGap": "No unacceptable increase in longest block wait",
+    "diffSwing": "Difficulty swing remains explainable and bounded relative to status quo"
+  },
+  "reproduction": {
+    "instructions": "Run matched challenge cells through the multiplayer simulator and compare /api/research summaries with status quo.",
+    "baseline": "lwma90",
+    "seedsOrDataRange": "Record commit, simulation version, challenge, and deterministic room PRNG coverage for each evidence batch.",
+    "minimumSamplesPerCell": 30
+  },
+  "integrity": "Manual rounds remain exploratory and excluded from official randomized aggregates; variant IDs and existing research fields remain immutable.",
+  "evidence": [],
+  "decision": {
+    "summary": "Builtin candidate represented for governance and future evidence tracking; runtime remains defined in server/challenges.js.",
+    "reviewedBy": ["project maintainers"]
+  }
+}

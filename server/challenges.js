@@ -159,7 +159,7 @@ const CHALLENGE_FACTORIES = [
   },
 ];
 
-function drawChallenge(rng) {
+function drawChallenge(rng, variantMode = 'random') {
   let factory = CHALLENGE_FACTORIES[Math.floor(rng() * CHALLENGE_FACTORIES.length)];
   // Debug/testing hook: FORCE_CHALLENGE=shadow npm start pins the draw.
   if (process.env.FORCE_CHALLENGE) {
@@ -167,7 +167,9 @@ function drawChallenge(rng) {
     if (forced) factory = forced;
   }
   const challenge = factory(rng);
-  challenge.variant = VARIANTS[Math.floor(rng() * VARIANTS.length)];
+  const selectedVariant = VARIANTS.find((variant) => variant.id === variantMode);
+  challenge.variant = selectedVariant || VARIANTS[Math.floor(rng() * VARIANTS.length)];
+  challenge.assignmentMode = selectedVariant ? 'manual' : 'randomized';
   return challenge;
 }
 
@@ -181,6 +183,7 @@ function publicChallenge(challenge) {
     objectiveLabel: challenge.objective.label,
     variantId: challenge.variant.id,
     variantLabel: challenge.variant.label,
+    assignmentMode: challenge.assignmentMode || 'randomized',
     // The brief names the shadow lane anyway; expose it so the client can aim.
     shadowAlgo: challenge.shadow ? challenge.shadow.algo : null,
   };

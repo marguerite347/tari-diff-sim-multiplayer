@@ -17,6 +17,7 @@ A community **research game**: a Node/Express + WebSocket multiplayer "network d
 | `server/room.js` | `Room`/`RoomManager`: game loop (`scheduleNext`), challenge arming, bot schedules, scoring, shadow-miner reorgs (`_shadowStep`, `_revealShadow`) |
 | `server/challenges.js` | Challenge ("level") factories, `VARIANTS` (network configs under test), `ObjectiveTracker` scoring |
 | `server/research.js` | Appends round results to `data/rounds.jsonl` (`recordRound`), aggregates per challenge×variant (`aggregate`) |
+| `candidates/`, `docs/*-process.md` | Candidate registry plus governance paths for network-rule candidates and community challenge proposals |
 | `index.html` | Single page: solo simulator tabs + the multiplayer game; loads all scripts (no build step) |
 | `js/multiplayer.js` | Multiplayer client: WebSocket handling, HUD, sliders, leaderboard, ticker narration, telemetry charts |
 | `js/battlefield.js` | Three.js 3D battlefield: armies, difficulty walls, invaders, block tower, reorg/orphan effects, skyboxes |
@@ -56,6 +57,7 @@ Open http://localhost:8787 → **Multiplayer** tab → **Create room** → **Sta
 5. **`LwmaWindow.calculate` is an exact port of Tari's Rust LWMA** (BigInt integer math, clamps, weighting). Do not "clean up" or float-ify it. Same for the client copy in `js/lwma.js`.
 6. **Research data schema stability.** The fields written by `recordRound` (in `Room.finishChallenge`) and consumed by `aggregate()` in `server/research.js` are a stable schema: `data/rounds.jsonl` is append-only and old lines must keep aggregating correctly. Add new fields freely; never rename, repurpose, or change the meaning of existing ones. Never reuse an existing challenge or variant `id`.
 7. **Network verdict and personal score are separate.** `ObjectiveTracker.evaluate()` alone decides whether the room defended the network. Player points, streaks, and MVP reward mined blocks but must never override or be presented as the round verdict.
+8. **Manual evidence is exploratory.** Manually selected variants must carry `assignmentMode: manual` and remain excluded from the official randomized aggregate. A community proposal enters the randomized pool only after the review and evidence process in `docs/research-candidate-process.md`.
 
 ## Code style
 
@@ -71,4 +73,6 @@ Open http://localhost:8787 → **Multiplayer** tab → **Create room** → **Sta
 - Verify in the browser before opening a PR — actually play a round exercising your change, and say in the PR what you tested (including which `FORCE_CHALLENGE` if relevant).
 - **Never commit** `data/` (gitignored research output) or `assets/skyboxes/` (~1.6 GB, untracked). Check `git status` before staging.
 - If you touch the round-result schema or challenge/variant ids, call it out prominently — it affects everyone's collected research data.
+- Network candidate work must update/validate `candidates/`, follow `docs/research-candidate-process.md`, and preserve immutable IDs. Run `npm run validate:candidates`.
+- New community challenges must follow `docs/challenge-proposal-process.md`, preserve immutable IDs, and include seeded balance evidence across both builtin variants. They must be losable when ignored and winnable through meaningful play.
 - Follow the task recipes in `skills/` when your change matches one (new challenge, new variant, battlefield visual, Copilot tuning).

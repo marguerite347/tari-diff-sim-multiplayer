@@ -67,8 +67,8 @@ const Copilot = (function () {
     return typeof window !== 'undefined' && window.LLMBridge?.isActive();
   }
 
-  function llmSystemPrompt() {
-    return [
+  function llmSystemPrompt(includeRepoContext = false) {
+    const lines = [
       'You are the strategy brain of a mining copilot in a Tari network defense game.',
       'The network has 4 proof-of-work algos: RandomXM(0), Sha3x(1), RandomXT(2), Cuckaroo(3). Each algo has its own LWMA difficulty that adapts to the hashrate pointed at it: more hash -> difficulty rises -> that lane slows; hash leaving a lane strands its difficulty high and blocks stall there. Network target is one block every 120s across all algos. TIP-004 (when active) penalizes an algo that wins several blocks in a row by multiplying its difficulty.',
       'Objective types: "stability" = keep mean block time near 120s; "dominance" = keep every single algo\'s share of recent blocks below a limit; "reorg" = a shadow miner builds a hidden chain on one algo — keep that algo\'s difficulty high to starve it and prevent a reorg.',
@@ -77,7 +77,10 @@ const Copilot = (function () {
       'Respond with STRICT JSON only, no prose, exactly this shape:',
       '{"weights":[w0,w1,w2,w3],"totalPower":n,"profileBias":"hardCounter|balanced|lightTouch","say":"one short paragraph of in-character tactical narration"}',
       'weights are relative allocation across the 4 algos (any positive numbers, they get normalized). totalPower is your suggested total (40-400). profileBias picks the reflex layer\'s aggression. say is what you tell the pilot.',
-    ].join('\n');
+    ];
+    const repoContext = includeRepoContext ? window.LLMBridge?.repoContextPrompt?.() : '';
+    if (repoContext) lines.push(repoContext);
+    return lines.join('\n');
   }
 
   function llmNarrate(say) {
@@ -92,13 +95,14 @@ const Copilot = (function () {
       .map(([id, s]) => `${id}: ${s.wins}/${s.plays} wins, avg stability ${s.plays ? Math.round((s.stabilitySum / s.plays) * 100) : 0}%`);
     const prompt = [
       `Challenge started: ${challenge.name} (id ${challenge.id}). Config: ${challenge.variantLabel} (${challenge.variantId === 'lwma90' ? 'slow LWMA-90 window, NO TIP-004 penalty' : 'fast LWMA-45 window, TIP-004 penalty active'}).`,
+      `Research assignment: ${challenge.assignmentMode === 'manual' ? 'exploratory manual selection (excluded from official randomized aggregate)' : 'randomized A/B research'}.`,
       challenge.shadowAlgo != null ? `Shadow miner targets algo ${challenge.shadowAlgo}.` : '',
       memLines.length ? `My memory on this exact challenge+config (${entry.plays} past plays):\n${memLines.join('\n')}` : 'No memory of this challenge+config yet.',
       entry.lessons?.length ? `Lessons from past rounds:\n${entry.lessons.join('\n')}` : '',
       'Give me opening guidance as strict JSON per the contract.',
     ].filter(Boolean).join('\n');
 
-    window.LLMBridge.requestGuidance(llmSystemPrompt(), prompt).then((g) => {
+    window.LLMBridge.requestGuidance(llmSystemPrompt(true), prompt).then((g) => {
       if (!g || !enabled || roundKey !== key) return; // stale or round over — drop silently
       if (g.profileBias && PROFILES[g.profileBias]) {
         profileId = g.profileBias;
@@ -144,7 +148,7 @@ const Copilot = (function () {
       'Write a one-sentence lesson for my memory in "say" (what to keep or change next time on this challenge). Strict JSON per the contract; weights/totalPower/profileBias may be null.',
     ].join('\n');
 
-    window.LLMBridge.requestGuidance(llmSystemPrompt(), prompt).then((g) => {
+    window.LLMBridge.requestGuidance(llmSystemPrompt(true), prompt).then((g) => {
       if (!g?.say) return;
       const lesson = `[LLM] ${g.say.slice(0, 240)}`;
       const { memory, entry } = memoryFor(key);

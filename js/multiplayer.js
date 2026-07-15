@@ -10,6 +10,12 @@ const Multiplayer = (function () {
 
   const TUTORIAL_KEY = 'tariTutorialSeen.v1';
   const SESSION_KEY = 'tariPlayerSession.v1';
+  const CALLSIGN_KEY = 'tariCallsign.v1';
+  const NEXT_CHALLENGE_TIMEOUT_MS = 7000;
+  const CALLSIGN_WORDS = [
+    'EMBER', 'ORBIT', 'BEACON', 'FORGE', 'NEXUS', 'QUARTZ', 'RELAY', 'SENTRY',
+    'SPARK', 'VECTOR', 'VAULT', 'PULSE', 'COMET', 'CIPHER', 'ANCHOR', 'TUNNEL',
+  ];
 
   let ws = null;
   let playerId = null;
@@ -19,6 +25,47 @@ const Multiplayer = (function () {
   let copilotAutoEngaged = false;
   let researchResetRequiresToken = false;
   let nextChallengePending = false;
+  let nextChallengeRequestId = null;
+  let nextChallengeTimer = null;
+  let experimentReturnFocus = null;
+
+  function randomInt(max) {
+    if (window.crypto?.getRandomValues) {
+      const values = new Uint32Array(1);
+      window.crypto.getRandomValues(values);
+      return values[0] % max;
+    }
+    return Math.floor(Math.random() * max);
+  }
+
+  function generateCallsign() {
+    const word = CALLSIGN_WORDS[randomInt(CALLSIGN_WORDS.length)];
+    return `MINER-${word}-${String(randomInt(100)).padStart(2, '0')}`;
+  }
+
+  function sanitizePreferredName(name) {
+    const normalized = String(name ?? '').normalize('NFKC')
+      .replace(/[\p{Cc}\p{Cf}]/gu, '')
+      .replace(/[^\p{L}\p{M}\p{N}\s_.-]/gu, '')
+      .replace(/\s+/gu, ' ')
+      .trim();
+    return [...normalized].slice(0, 24).join('');
+  }
+
+  function savePreferredName(name) {
+    let preferred = sanitizePreferredName(name);
+    if (!preferred || preferred.toLowerCase() === 'miner') preferred = generateCallsign();
+    try { localStorage.setItem(CALLSIGN_KEY, preferred); } catch { /* storage unavailable */ }
+    const input = document.getElementById('mpName');
+    if (input) input.value = preferred;
+    return preferred;
+  }
+
+  function initPreferredName() {
+    let stored = '';
+    try { stored = localStorage.getItem(CALLSIGN_KEY) || ''; } catch { /* storage unavailable */ }
+    savePreferredName(stored);
+  }
 
   function wsUrl() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -36,7 +83,7 @@ const Multiplayer = (function () {
     ws.addEventListener('open', () => setConnStatus('Connected'));
     ws.addEventListener('close', () => {
       setConnStatus('Disconnected — retrying…');
-      setNextChallengePending(false);
+      failNextChallenge('Connection lost while starting the next challenge — try again after reconnecting.');
       ws = null;
       setTimeout(connect, 1200);
     });
@@ -56,6 +103,7 @@ const Multiplayer = (function () {
   function handleServerMessage(msg) {
     switch (msg.type) {
       case 'hello':
+        setNextChallengePending(false);
         playerId = msg.playerId;
         if (msg.resumeToken) {
           try { localStorage.setItem(SESSION_KEY, msg.resumeToken); } catch { /* storage unavailable */ }
@@ -66,7 +114,7 @@ const Multiplayer = (function () {
         break;
       case 'room_state':
         roomState = msg;
-        if (!msg.roundOver) setNextChallengePending(false);
+        if (nextChallengePending && msg.running && !msg.roundOver) setNextChallengePending(false);
         if (msg.height === 0 && labHistory.heights.length) resetTelemetry();
         if (window.Battlefield && msg.shadow) Battlefield.setShadowCount(msg.shadow.count, msg.shadow.algo);
         render();
@@ -89,6 +137,21 @@ const Multiplayer = (function () {
         ticker(`NEW CHALLENGE: ${msg.challenge?.name || 'UNKNOWN'} — DEFEND THE NETWORK`, 'sys');
         renderStatusLamp();
         if (window.Copilot) Copilot.onBrief(msg.challenge, roomState);
+        break;
+      case 'next_challenge_result':
+        if (msg.requestId && msg.requestId !== nextChallengeRequestId) break;
+        if (msg.ok) {
+          setNextChallengePending(false);
+        } else {
+          failNextChallenge(msg.error || 'Could not start next challenge — try again.');
+        }
+        break;
+      case 'return_to_setup_result':
+        if (!msg.ok) {
+          statusMessage = msg.error || 'Could not return to setup';
+          renderStatus();
+          showToast(statusMessage.toUpperCase(), 'bad');
+        }
         break;
       case 'block_mined':
         if (!roomState) return;
@@ -166,7 +229,9 @@ const Multiplayer = (function () {
         renderStatusLamp();
         break;
       case 'error':
-        setNextChallengePending(false);
+        if (nextChallengePending) {
+          failNextChallenge(msg.error || 'Could not start next challenge — try again.');
+        }
         // A join against a room the server no longer knows (usually wiped by a
         // restart) should drop the stale ?room= link, not leave a zombie UI.
         if (!roomState && /room not found/i.test(msg.error || '')) {
@@ -205,14 +270,18 @@ const Multiplayer = (function () {
   }
 
   function init() {
+    initPreferredName();
+    document.getElementById('mpName')?.addEventListener('change', (event) => {
+      savePreferredName(event.target.value);
+    });
     document.getElementById('mpCreate')?.addEventListener('click', () => {
-      send({ type: 'create_room', name: document.getElementById('mpName')?.value || 'Host' });
+      send({ type: 'create_room', name: savePreferredName(document.getElementById('mpName')?.value) });
     });
     document.getElementById('mpJoin')?.addEventListener('click', () => {
       send({
         type: 'join_room',
         room: document.getElementById('mpRoomCode')?.value || '',
-        name: document.getElementById('mpName')?.value || 'Miner',
+        name: savePreferredName(document.getElementById('mpName')?.value),
       });
     });
     document.getElementById('mpStart')?.addEventListener('click', () => send({ type: 'start' }));
@@ -230,11 +299,16 @@ const Multiplayer = (function () {
     });
     document.getElementById('mpVictoryDismiss')?.addEventListener('click', () => {
       const isHost = roomState?.hostId === roomState?.you;
-      if (!isHost) {
-        hideVictory();
-        return;
+      if (!isHost || nextChallengePending) return;
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+      setNextChallengePending(true, requestId);
+      if (!send({ type: 'next_challenge', requestId })) {
+        failNextChallenge('Could not start next challenge — reconnect and try again.');
       }
-      if (send({ type: 'next_challenge' })) setNextChallengePending(true);
+    });
+    document.getElementById('mpVictorySetup')?.addEventListener('click', () => {
+      if (roomState?.hostId !== roomState?.you) return;
+      send({ type: 'return_to_setup' });
     });
     document.getElementById('mpResearchReset')?.addEventListener('click', openResearchReset);
     document.getElementById('mpResearchResetClose')?.addEventListener('click', closeResearchReset);
@@ -308,9 +382,13 @@ const Multiplayer = (function () {
         settings: { speedup: Number(document.getElementById('mpSpeedup')?.value || 30) },
       });
     });
+    document.getElementById('mpVariantMode')?.addEventListener('change', (event) => {
+      send({ type: 'set_settings', settings: { variantMode: event.target.value } });
+    });
 
     document.getElementById('mpChallengeGo')?.addEventListener('click', hideChallengeCard);
 
+    initExperimentExplainer();
     initTutorial();
     connect();
     render();
@@ -318,6 +396,32 @@ const Multiplayer = (function () {
   }
 
   // --- First-run tutorial ---
+
+  function initExperimentExplainer() {
+    const dialog = document.getElementById('mpExperimentDialog');
+    document.getElementById('mpExperimentHelp')?.addEventListener('click', openExperimentExplainer);
+    document.getElementById('mpExperimentClose')?.addEventListener('click', closeExperimentExplainer);
+    document.getElementById('mpExperimentDone')?.addEventListener('click', closeExperimentExplainer);
+    dialog?.addEventListener('click', (event) => {
+      if (event.target === dialog) closeExperimentExplainer();
+    });
+  }
+
+  function openExperimentExplainer() {
+    const dialog = document.getElementById('mpExperimentDialog');
+    if (!dialog) return;
+    experimentReturnFocus = document.activeElement;
+    dialog.hidden = false;
+    requestAnimationFrame(() => document.getElementById('mpExperimentClose')?.focus());
+  }
+
+  function closeExperimentExplainer() {
+    const dialog = document.getElementById('mpExperimentDialog');
+    if (!dialog || dialog.hidden) return;
+    dialog.hidden = true;
+    if (experimentReturnFocus?.isConnected) experimentReturnFocus.focus();
+    experimentReturnFocus = null;
+  }
 
   function initTutorial() {
     const overlay = document.getElementById('mpTutorial');
@@ -331,6 +435,7 @@ const Multiplayer = (function () {
       if (event.key === 'Escape') {
         hideTutorial();
         closeResearchReset();
+        closeExperimentExplainer();
       }
     });
     document.getElementById('mpHelp')?.addEventListener('click', showTutorial);
@@ -715,6 +820,7 @@ const Multiplayer = (function () {
     document.getElementById('mpChallengeName').textContent = challenge.name;
     document.getElementById('mpChallengeBrief').textContent = challenge.brief;
     document.getElementById('mpChallengeVariant').textContent = challenge.variantLabel;
+    renderAssignmentBadge(document.getElementById('mpAssignmentBadge'), challenge.assignmentMode);
     document.getElementById('mpChallengeObjective').textContent = `WIN CONDITION — ${challenge.objectiveLabel}`;
     overlay.hidden = false;
     clearTimeout(showChallengeCard._timer);
@@ -734,6 +840,10 @@ const Multiplayer = (function () {
     document.getElementById('mpVictoryTitle').textContent = success ? 'NETWORK DEFENDED' : 'NETWORK DEGRADED';
     document.getElementById('mpVictoryTitle').classList.toggle('fail', !success);
     document.getElementById('mpVictorySub').textContent = result.challenge?.variantLabel || '';
+    renderAssignmentBadge(
+      document.getElementById('mpResultAssignmentBadge'),
+      result.assignmentMode || result.challenge?.assignmentMode
+    );
 
     // The verdict is decided by exactly one metric (the challenge objective);
     // say which, so a 0% stability next to "DEFENDED" reads as context, not
@@ -764,12 +874,7 @@ const Multiplayer = (function () {
       ${cell('penalties', 'PENALTIES', `${result.penaltyEvents || 0}`, false)}
       ${result.mvpName ? `<div class="mp-result-mvp"><span>MVP</span><strong>${escapeHtml(result.mvpName)}</strong></div>` : ''}
       <div class="mp-result-note">Datapoint recorded — thanks for testing the Tari network.</div>`;
-    const continueButton = document.getElementById('mpVictoryDismiss');
-    if (continueButton) {
-      const isHost = roomState?.hostId === roomState?.you;
-      continueButton.textContent = isHost ? 'CONTINUE TO NEXT CHALLENGE' : 'CLOSE RESULTS';
-      continueButton.disabled = isHost && nextChallengePending;
-    }
+    renderResultAction();
     overlay.querySelector('.mp-confetti').style.display = success ? '' : 'none';
     overlay.hidden = false;
   }
@@ -779,12 +884,56 @@ const Multiplayer = (function () {
     if (overlay) overlay.hidden = true;
   }
 
-  function setNextChallengePending(pending) {
-    nextChallengePending = pending;
+  function renderResultAction() {
     const button = document.getElementById('mpVictoryDismiss');
+    const setupButton = document.getElementById('mpVictorySetup');
     if (!button) return;
-    button.disabled = pending;
-    if (pending) button.textContent = 'STARTING NEXT CHALLENGE…';
+    const isHost = roomState?.hostId === roomState?.you;
+    if (setupButton) {
+      setupButton.hidden = !isHost;
+      setupButton.disabled = nextChallengePending;
+    }
+    if (!isHost) {
+      button.textContent = 'WAITING FOR HOST';
+      button.disabled = true;
+    } else if (nextChallengePending) {
+      button.textContent = 'STARTING NEXT CHALLENGE…';
+      button.disabled = true;
+    } else {
+      button.textContent = 'CONTINUE TO NEXT CHALLENGE';
+      button.disabled = false;
+    }
+  }
+
+  function renderAssignmentBadge(element, assignmentMode) {
+    if (!element) return;
+    const manual = assignmentMode === 'manual';
+    element.textContent = manual ? 'EXPLORATORY · MANUAL VARIANT' : 'RANDOMIZED RESEARCH';
+    element.classList.toggle('manual', manual);
+  }
+
+  function setNextChallengePending(pending, requestId = null) {
+    clearTimeout(nextChallengeTimer);
+    nextChallengeTimer = null;
+    nextChallengePending = pending;
+    nextChallengeRequestId = pending ? requestId : null;
+    if (pending) {
+      nextChallengeTimer = setTimeout(() => {
+        failNextChallenge('Could not start next challenge — try again.');
+      }, NEXT_CHALLENGE_TIMEOUT_MS);
+    }
+    renderResultAction();
+    render();
+  }
+
+  function failNextChallenge(message) {
+    const wasPending = nextChallengePending;
+    setNextChallengePending(false);
+    if (!wasPending) return;
+    statusMessage = message;
+    renderStatus();
+    showToast(message.toUpperCase(), 'bad');
+    if (roomState?.roundOver && roomState.lastResult) showResult(roomState.lastResult);
   }
 
   async function loadResearch() {
@@ -796,7 +945,7 @@ const Multiplayer = (function () {
       const resetButton = document.getElementById('mpResearchReset');
       researchResetRequiresToken = !!data.resetRequiresToken;
       if (resetButton) resetButton.hidden = !data.resetAvailable;
-      renderResearch(data.results || []);
+      renderResearch(data.results || [], data.exploratoryResults || []);
     } catch {
       /* endpoint unavailable in static mode — leave placeholder */
     }
@@ -852,31 +1001,39 @@ const Multiplayer = (function () {
     }
   }
 
-  function renderResearch(results) {
+  function renderResearch(results, exploratoryResults = []) {
     const el = document.getElementById('mpResearch');
     if (!el) return;
-    if (!results.length) {
+    if (!results.length && !exploratoryResults.length) {
       el.innerHTML = '<div class="dim">No rounds recorded yet — finish a challenge to add the first datapoint.</div>';
       return;
     }
-    const byChallenge = new Map();
-    for (const row of results) {
-      const key = `${row.simulationVersion || 'legacy'}::${row.challenge}`;
-      if (!byChallenge.has(key)) byChallenge.set(key, []);
-      byChallenge.get(key).push(row);
-    }
-    el.innerHTML = [...byChallenge.entries()].map(([, rows]) => {
-      const name = rows[0].challengeName || rows[0].challenge;
-      const version = rows[0].simulationVersion === 'legacy' ? 'LEGACY MODEL' : 'CALIBRATED MODEL';
-      const bars = rows.map((r) => `
-        <div class="mp-research-row">
-          <span class="mp-research-variant">${escapeHtml(r.variantLabel || r.variant)}</span>
-          <div class="mp-research-bar"><div style="width:${Math.round(r.winRate * 100)}%"></div></div>
-          <span class="mp-research-num">${Math.round(r.winRate * 100)}% defended · ${r.rounds} round${r.rounds === 1 ? '' : 's'} · avg stability ${Math.round(r.avgStability * 100)}%</span>
-          <span class="mp-research-health">chain health: mean BT ${r.avgMeanBt || 0}s · orphans ${r.avgOrphans ?? 0} · reorg ${r.avgDeepestReorg ?? 0} · longest wait ${r.avgWorstGap ?? '—'}${r.avgWorstGap == null ? '' : 's'} · diff swing ${r.avgDiffSwing ?? '—'}${r.avgDiffSwing == null ? '' : 'x'}</span>
-        </div>`).join('');
-      return `<div class="mp-research-group"><h4>${escapeHtml(name)} · ${version}</h4>${bars}</div>`;
-    }).join('');
+    const renderGroups = (rowsToRender) => {
+      const byChallenge = new Map();
+      for (const row of rowsToRender) {
+        const key = `${row.simulationVersion || 'legacy'}::${row.challenge}`;
+        if (!byChallenge.has(key)) byChallenge.set(key, []);
+        byChallenge.get(key).push(row);
+      }
+      return [...byChallenge.entries()].map(([, rows]) => {
+        const name = rows[0].challengeName || rows[0].challenge;
+        const version = rows[0].simulationVersion === 'legacy' ? 'LEGACY MODEL' : 'CALIBRATED MODEL';
+        const bars = rows.map((r) => `
+          <div class="mp-research-row">
+            <span class="mp-research-variant">${escapeHtml(r.variantLabel || r.variant)}</span>
+            <div class="mp-research-bar"><div style="width:${Math.round(r.winRate * 100)}%"></div></div>
+            <span class="mp-research-num">${Math.round(r.winRate * 100)}% defended · ${r.rounds} round${r.rounds === 1 ? '' : 's'} · avg stability ${Math.round(r.avgStability * 100)}%</span>
+            <span class="mp-research-health">chain health: mean BT ${r.avgMeanBt || 0}s · orphans ${r.avgOrphans ?? 0} · reorg ${r.avgDeepestReorg ?? 0} · longest wait ${r.avgWorstGap ?? '—'}${r.avgWorstGap == null ? '' : 's'} · diff swing ${r.avgDiffSwing ?? '—'}${r.avgDiffSwing == null ? '' : 'x'}</span>
+          </div>`).join('');
+        return `<div class="mp-research-group"><h4>${escapeHtml(name)} · ${version}</h4>${bars}</div>`;
+      }).join('');
+    };
+    el.innerHTML = [
+      '<h3 class="mp-research-section-title">OFFICIAL · RANDOMIZED A/B</h3>',
+      results.length ? renderGroups(results) : '<div class="dim">No randomized rounds recorded yet.</div>',
+      '<h3 class="mp-research-section-title exploratory">EXPLORATORY · MANUALLY SELECTED</h3>',
+      exploratoryResults.length ? renderGroups(exploratoryResults) : '<div class="dim">No manually selected rounds recorded yet.</div>',
+    ].join('');
   }
 
   function render() {
@@ -903,16 +1060,26 @@ const Multiplayer = (function () {
     const roundControls = document.getElementById('mpRoundControls');
     if (hostControls) hostControls.style.display = isHost ? '' : 'none';
     if (roundControls) roundControls.style.display = isHost ? '' : 'none';
+    const variantMode = document.getElementById('mpVariantMode');
+    if (variantMode) {
+      if (document.activeElement !== variantMode) variantMode.value = roomState.variantMode || 'random';
+      variantMode.disabled = !isHost || roomState.running || !!roomState.challenge;
+      variantMode.title = !isHost
+        ? 'Only the host can select the network variant'
+        : (variantMode.disabled ? 'Locked while a challenge is armed' : 'Select randomized research or a manual exploratory variant');
+    }
     if (isHost) {
       const startButton = document.getElementById('mpStart');
       const stopButton = document.getElementById('mpStop');
       const resetButton = document.getElementById('mpReset');
-      const canStart = !roomState.running && !roomState.roundOver;
-      const paused = canStart && !!roomState.challenge;
+      const canStart = !roomState.running && !nextChallengePending;
+      const paused = canStart && !!roomState.challenge && !roomState.roundOver;
       if (startButton) {
         startButton.style.display = canStart ? '' : 'none';
         startButton.disabled = !canStart;
-        startButton.textContent = paused ? '▶ RESUME' : '▶ START CHALLENGE';
+        startButton.textContent = roomState.roundOver
+          ? '▶ START NEXT CHALLENGE'
+          : (paused ? '▶ RESUME' : '▶ START CHALLENGE');
       }
       if (stopButton) {
         stopButton.style.display = roomState.running ? '' : 'none';

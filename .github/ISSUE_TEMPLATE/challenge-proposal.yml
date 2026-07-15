@@ -1,0 +1,87 @@
+name: Community challenge proposal
+description: Propose a scripted network stress test for review
+title: "[CHALLENGE] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read the [challenge proposal process](https://github.com/marguerite347/tari-diff-sim-multiplayer/blob/main/docs/challenge-proposal-process.md). A proposal does not automatically enter the official challenge pool.
+  - type: input
+    id: identity
+    attributes:
+      label: Challenge ID and name
+      description: Provide an immutable lowercase ID and player-facing arcade name.
+    validations:
+      required: true
+  - type: input
+    id: author
+    attributes:
+      label: Author/contact
+      description: GitHub handle(s) responsible for design and evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: story
+    attributes:
+      label: Story and threat model
+      description: Explain the attack in plain language and the network behavior it stresses.
+    validations:
+      required: true
+  - type: textarea
+    id: bots
+    attributes:
+      label: Bot roles and exact schedules
+      description: Include names, roles, block heights, hashrates, or complete shadow-miner parameters.
+    validations:
+      required: true
+  - type: textarea
+    id: timing
+    attributes:
+      label: Duration and scored window
+      description: Specify durationBlocks and scoredFromBlock with rationale.
+    validations:
+      required: true
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective type, threshold, and fit
+      description: Use stability, dominance, or reorg and explain why it measures this threat.
+    validations:
+      required: true
+  - type: textarea
+    id: presentation
+    attributes:
+      label: Battlefield events and ticker narration
+      description: Explain how players will read arrivals, shifts, danger, and recovery.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Seeded balance evidence across both variants
+      description: Include seed range, sample counts, ignored/human/Copilot outcomes, and results for lwma90 and lwma45_tip004.
+    validations:
+      required: true
+  - type: textarea
+    id: falsifiability
+    attributes:
+      label: Falsifiable tuning and configuration-bias criteria
+      description: Show how it can be lost when ignored, won through meaningful response, and avoids undeclared structural favoritism.
+    validations:
+      required: true
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Expected research metrics and edge cases
+      description: Cover success, stability, mean BT, orphans, reorg, longest wait, difficulty swing, performance, and security.
+    validations:
+      required: true
+  - type: checkboxes
+    id: acknowledgements
+    attributes:
+      label: Acknowledgements
+      options:
+        - label: I understand this issue cannot upload runtime code/data or automatically join the challenge pool.
+          required: true
+        - label: I will use seeded randomness and will not commit raw `data/`, secrets, or user data.
+          required: true
